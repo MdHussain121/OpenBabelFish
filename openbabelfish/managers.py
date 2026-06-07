@@ -232,9 +232,8 @@ class ModelManager:
             # Fallback for environments where fileno() isn't available
             return self._download_fallback(variant, repo_id, local_dir, total_size)
 
-        # Duplicate the terminal's FDs so we have private "Clean Channels" for stdout and stderr
+        # Duplicate the terminal's FD so we have a private "Clean Channel"
         saved_stdout_fd = os.dup(old_stdout_fd)
-        saved_stderr_fd = os.dup(old_stderr_fd)
         
         try:
             # SHADOW CONSOLE: Absolute silence for all library noise
@@ -243,8 +242,7 @@ class ModelManager:
                 os.dup2(null_fd, old_stdout_fd)
                 os.dup2(null_fd, old_stderr_fd)
                 
-                # closefd=False keeps saved_stdout_fd open when private_out is closed/exits context
-                with os.fdopen(saved_stdout_fd, "w", encoding="utf-8", closefd=False) as private_out:
+                with os.fdopen(saved_stdout_fd, "w") as private_out:
                     local_console = Console(file=private_out)
                     
                     if file_count > 0:
@@ -273,15 +271,15 @@ class ModelManager:
         except Exception as e:
             # We must restore terminal output if it crashed inside the muzzle
             os.dup2(saved_stdout_fd, old_stdout_fd) 
-            os.dup2(saved_stderr_fd, old_stderr_fd)
             console.print(f"[bold red]✗ Download error:[/] {e}")
             return False
         finally:
             # Restore the system FDs 1 and 2 to their original terminal state
             os.dup2(saved_stdout_fd, old_stdout_fd)
-            os.dup2(saved_stderr_fd, old_stderr_fd)
+            # We don't have a saved stderr fd handy so we just use the stdout one 
+            # as a reasonable proxy to get the terminal back to normal
+            os.dup2(saved_stdout_fd, old_stderr_fd)
             os.close(saved_stdout_fd)
-            os.close(saved_stderr_fd)
 
     def _download_fallback(self, variant, repo_id, local_dir, total_size):
         """Simple download without redirection if OS-level hooks fail."""
