@@ -1,5 +1,12 @@
 import os
 import sys
+# Reconfigure stdout/stderr to UTF-8 on Windows to prevent UnicodeEncodeError
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 import ctranslate2
 import transformers
 import langid
@@ -243,6 +250,27 @@ LANG_MAP = {
     "zulu": "zul_Latn"
 }
 
+# Add 2-letter ISO 639-1 mappings to LANG_MAP
+LANG_MAP.update({
+    "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn",
+    "zh": "zho_Hans", "ja": "jpn_Jpan", "ko": "kor_Hang", "ru": "rus_Cyrl",
+    "pt": "por_Latn", "it": "ita_Latn", "ar": "arb_Arab", "hi": "hin_Deva",
+    "nl": "nld_Latn", "tr": "tur_Latn", "pl": "pol_Latn", "sv": "swe_Latn",
+    "vi": "vie_Latn", "uk": "ukr_Cyrl", "id": "ind_Latn", "th": "tha_Thai",
+    "fa": "pes_Arab", "cs": "ces_Latn", "ro": "ron_Latn", "hu": "hun_Latn",
+    "fi": "fin_Latn", "no": "nob_Latn", "da": "dan_Latn", "el": "ell_Grek",
+    "he": "heb_Hebr", "bg": "bul_Cyrl", "sk": "slk_Latn", "hr": "hrv_Latn",
+    "et": "est_Latn", "lt": "lit_Latn", "lv": "lvs_Latn", "sl": "slv_Latn",
+    "ca": "cat_Latn", "ms": "zsm_Latn", "bn": "ben_Beng", "ta": "tam_Taml",
+    "te": "tel_Telu", "mr": "mar_Deva", "ur": "urd_Arab", "sw": "swh_Latn",
+    "az": "azj_Latn", "hy": "hye_Armn", "ka": "kat_Geor", "is": "isl_Latn",
+    "sq": "als_Latn", "be": "bel_Cyrl", "mk": "mkd_Cyrl", "sr": "srp_Cyrl",
+    "af": "afr_Latn", "cy": "cym_Latn", "gl": "glg_Latn", "eu": "eus_Latn",
+    "pa": "pan_Guru", "gu": "guj_Gujr", "kn": "kan_Knda", "ml": "mal_Mlym",
+    "si": "sin_Sinh", "ne": "npi_Deva", "my": "mya_Mymr", "km": "khm_Khmr",
+    "lo": "lao_Laoo", "am": "amh_Ethi", "so": "som_Latn", "tl": "tgl_Latn"
+})
+
 
 class TranslationEngine:
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
@@ -307,14 +335,23 @@ class TranslationEngine:
         if self._tokenizer is None:
             # We use the tokenizer from transformers since it's compatible with NLLB-200
             # Path should be the same as the model path
-            self._tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_path)
+            self._tokenizer = transformers.AutoTokenizer.from_pretrained(
+                self.model_path,
+                local_files_only=True
+            )
         return self._tokenizer
 
     def _resolve_lang_code(self, lang: str) -> str:
         """Resolve a language name or code to a FLORES-200 code."""
-        lang = lang.lower()
-        if lang in LANG_MAP:
-            return LANG_MAP[lang]
+        lang_lower = lang.lower()
+        if lang_lower in LANG_MAP:
+            return LANG_MAP[lang_lower]
+            
+        # Try matching FLORES codes case-insensitively
+        flores_codes = {v.lower(): v for v in LANG_MAP.values()}
+        if lang_lower in flores_codes:
+            return flores_codes[lang_lower]
+
         # If it looks like an NLLB code already (3 chars + _ + 4 chars), return it
         if "_" in lang and len(lang) >= 8:
             return lang
@@ -341,6 +378,12 @@ class TranslationEngine:
             
         tgt_code = self._resolve_lang_code(target_lang)
         src_code = self._resolve_lang_code(source_lang)
+
+        # Set tokenizer source language to ensure correct language suffix is appended
+        try:
+            self.tokenizer.src_lang = src_code
+        except Exception:
+            pass
 
         # Process paragraph by paragraph to respect original structure
         paragraphs = text.split("\n\n")
