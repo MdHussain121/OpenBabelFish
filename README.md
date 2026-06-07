@@ -11,11 +11,13 @@ A high-performance, fully-offline translation appliance. **OpenBabelFish** is de
 
 ## 🚀 Key Features
 
-- **Local-First**: Complete privacy. No internet connection is used for translation.
+- **Local-First & Private**: Complete offline translation. No internet connection is used or required once models are downloaded.
 - **Deep Translation Engine**: Powered by Meta's NLLB-200 (No Language Left Behind) models.
-- **Hardware Optimized**: Supports seamless switching between CPU and NVIDIA GPU (CUDA) acceleration.
-- **Smart Model Management**: Automatically downloads and manages model variants (600M, 1.3B, 3.3B).
-- **Interactive REPL**: A beautiful, colorized shell interface for real-time translation and configuration.
+- **Flexible Language Resolution**: Supports standard language names (e.g., `english`, `spanish`), FLORES-200 language codes (e.g., `eng_Latn`, `spa_Latn`), and **2-letter ISO 639-1 language codes** (e.g., `en`, `es`, `fr`, `ja`).
+- **Hardware Optimized**: Supports seamless switching between CPU and NVIDIA GPU (CUDA) acceleration with automatic dependency auditing.
+- **Smart Model Management**: Automatically downloads, validates, and manages model variants (600M, 1.3B, 3.3B) with leak-proof system hooks.
+- **Cross-Platform Compatibility**: Enhanced terminal Unicode/UTF-8 output configuration, ensuring crashes are prevented on Windows systems.
+- **Interactive REPL**: A beautiful, colorized shell interface for real-time translation, config management, and quick inline execution.
 
 ## 🛠 Installation
 
@@ -26,7 +28,7 @@ A high-performance, fully-offline translation appliance. **OpenBabelFish** is de
 ### Quick Start
 1. Clone the repository:
    ```bash
-   git clone https://github.com/MdHu55a1n/OpenBabelFish.git
+   git clone https://github.com/MdHussain121/OpenBabelFish.git
    cd OpenBabelFish
    ```
 2. Run the automated launcher:
@@ -40,18 +42,28 @@ A high-performance, fully-offline translation appliance. **OpenBabelFish** is de
 ### Command Line Mode
 ```bash
 openbabelfish --to spanish -f document.txt
+# Or using 2-letter ISO codes:
+openbabelfish --to es -f document.txt
 ```
 
 ### Options
-- `--to [lang]`: Target language (Required)
+- `--to [lang]`: Target language (Required; accepts names like `spanish`, ISO codes like `es`, or FLORES codes like `spa_Latn`)
 - `--from [lang]`: Source language (Auto-detected if omitted)
 - `-f, --file [path]`: Read input from a file
 - `-o, --output [path]`: Save translation to a file
 - `--gpu / --cpu`: Force specific hardware mode
 - `--models`: Show and manage downloaded model variants
+- `--packages`: Audit system dependencies and install missing requirements
 
 ### Interactive Shell
 Simply run `openbabelfish` (or `run_openbabelfish.bat`) with no arguments to enter the interactive shell.
+
+#### Quick translation in REPL
+In the REPL, you can translate inline using prefix notation:
+```text
+openbabelfish ❯ spanish: Hello world
+openbabelfish ❯ es: How are you?
+```
 
 ## 📜 License
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
