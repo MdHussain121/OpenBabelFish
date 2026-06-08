@@ -59,6 +59,16 @@ REQUIRED_PACKAGES = {
         "nvidia-cublas-cu12": ">=12.0",
         "nvidia-cudnn-cu12": ">=8.0"
     },
+    "Document Extraction (Auto-installed)": {
+        "PyMuPDF": ">=1.24.0",
+        "python-docx": ">=1.0.0",
+        "python-pptx": ">=0.6.21",
+        "EbookLib": ">=0.18",
+        "beautifulsoup4": ">=4.12.0"
+    },
+    "OCR Engine (Auto-installed)": {
+        "easyocr": ">=1.7"
+    },
     "Utility (Optional)": {
         "Pillow": ">=9.0.0"
     }
@@ -141,9 +151,9 @@ class DependencyManager:
 
         console.print(f"\n[bold cyan]Installing required packages: {', '.join(packages)}...[/]")
         try:
-            with console.status("[bold green]Pip is updating your environment...[/]"):
-                to_install = [f"{p}{known[p]}" for p in packages]
-                subprocess.check_call([sys.executable, "-m", "pip", "install", *to_install])
+            to_install = [f"{p}{known[p]}" for p in packages]
+            # Run pip directly so its real-time download progress (in MB) is displayed
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *to_install])
             console.print("[bold green]✓ Packages installed successfully![/]")
             return True
         except subprocess.CalledProcessError as e:
@@ -161,16 +171,77 @@ class DependencyManager:
             gpu_packages = REQUIRED_PACKAGES["GPU Acceleration (Optional)"]
             install_specs = [f"{pkg}{ver}" for pkg, ver in gpu_packages.items()
                             if pkg.startswith("nvidia")]
-            # We use -q for quiet but show a spinner
-            with console.status("[bold green]Pip is downloading CUDA kernels...[/]"):
-                subprocess.check_call([
-                    sys.executable, "-m", "pip", "install", "-q",
-                    *install_specs
-                ])
+            # Run pip directly without -q or spinner so real-time download progress (in MB) is displayed
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                *install_specs
+            ])
             console.print("[bold green]✓ GPU dependencies installed successfully![/]")
             return True
         except subprocess.CalledProcessError as e:
             console.print(f"[bold red]✗ Failed to install GPU support:[/] {e}")
+            return False
+
+    @staticmethod
+    def is_document_support_installed() -> bool:
+        """Check if document extraction libraries are installed."""
+        try:
+            __import__("fitz")      # PyMuPDF
+            __import__("docx")      # python-docx
+            __import__("pptx")      # python-pptx
+            __import__("ebooklib")  # EbookLib
+            __import__("bs4")       # beautifulsoup4
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def is_ocr_installed() -> bool:
+        """Check if EasyOCR is installed."""
+        try:
+            __import__("easyocr")
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def install_document_support() -> bool:
+        """Install document extraction libraries (PyMuPDF, python-docx, etc.) via pip."""
+        console.print("\n[bold cyan]Installing document extraction support...[/]")
+        console.print("[dim]Downloading PDF, DOCX, PPTX, and EPUB libraries.[/dim]\n")
+
+        try:
+            doc_packages = REQUIRED_PACKAGES["Document Extraction (Auto-installed)"]
+            install_specs = [f"{pkg}{ver}" for pkg, ver in doc_packages.items()]
+            with console.status("[bold green]Pip is installing document libraries...[/]"):
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "-q",
+                    *install_specs
+                ])
+            console.print("[bold green]✓ Document extraction libraries installed![/]")
+            return True
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red]✗ Failed to install document support:[/] {e}")
+            return False
+
+    @staticmethod
+    def install_ocr_support() -> bool:
+        """Install EasyOCR via pip. Downloads ~200 MB of OCR models on first use."""
+        console.print("\n[bold cyan]Installing OCR engine (EasyOCR)...[/]")
+        console.print("[dim]EasyOCR will download language models (~100-200 MB) on first OCR use.[/dim]\n")
+
+        try:
+            ocr_packages = REQUIRED_PACKAGES["OCR Engine (Auto-installed)"]
+            install_specs = [f"{pkg}{ver}" for pkg, ver in ocr_packages.items()]
+            with console.status("[bold green]Pip is installing EasyOCR...[/]"):
+                subprocess.check_call([
+                    sys.executable, "-m", "pip", "install", "-q",
+                    *install_specs
+                ])
+            console.print("[bold green]✓ EasyOCR installed successfully![/]")
+            return True
+        except subprocess.CalledProcessError as e:
+            console.print(f"[bold red]✗ Failed to install EasyOCR:[/] {e}")
             return False
 
 @contextlib.contextmanager
