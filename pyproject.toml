@@ -23,6 +23,12 @@ dependencies = [
     "numpy<2.0.0",
     "Pillow>=9.0.0",
     "urllib3<2.0.0",
+    "PyMuPDF>=1.24.0",
+    "python-docx>=1.0.0",
+    "python-pptx>=0.6.21",
+    "EbookLib>=0.18",
+    "beautifulsoup4>=4.12.0",
+    "easyocr>=1.7",
 ]
 
 [project.scripts]

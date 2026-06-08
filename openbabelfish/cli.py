@@ -1,4 +1,10 @@
+import os
 import sys
+import warnings
+# Suppress UserWarning and DeprecationWarning to keep CLI/TUI outputs clean of library noise
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 # Reconfigure stdout/stderr to UTF-8 on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":
     try:
@@ -18,9 +24,10 @@ from rich.padding import Padding
 from rich.prompt import Confirm, Prompt
 from rich import box
 from rich.align import Align
+from rich.live import Live
 import shlex
 
-from .config import is_setup_complete, load_config, save_config, get_model_path, BASE_DIR
+from .config import load_config, save_config, get_model_path, BASE_DIR, CONFIG_FILE
 from .engine import TranslationEngine
 from .managers import DependencyManager, ModelManager, VARIANT_INFO
 
@@ -39,7 +46,17 @@ LOGO = Text.assemble(
 
 def _print_logo():
     console.print()
-    console.print(Align(LOGO, align="left"))
+    if console.width >= 105:
+        console.print(Align.center(LOGO))
+    else:
+        compact_logo = Text.assemble(
+            (" 🐡  ", ""),
+            ("Open", "bold bright_cyan"),
+            ("Babel", "bold cyan"),
+            ("Fish", "bold blue"),
+            ("  ·  Offline Universal Translator  ·  Powered by Meta NLLB-200", "dim italic")
+        )
+        console.print(Align.center(compact_logo))
 
 
 def _print_divider(title: str = "", style: str = "bright_black"):
@@ -66,164 +83,231 @@ class OpenBabelFishHelpFormatter(argparse.HelpFormatter):
         _print_divider()
 
         # Usage
-        console.print(Padding(
-            Text.assemble(
-                ("Usage  ", "bold bright_cyan"), 
-                ("openbabelfish ", "bold green"), 
-                ("[OPTIONS]", "dim"),
-                ("\n[italic dim]         (The 'openbabelfish' prefix is optional in shell mode)[/]", "")
-            ),
-            (1, 2)
-        ))
+        usage_text = Text.assemble(
+            ("Usage  ", "bold bright_cyan"), 
+            ("openbabelfish ", "bold green"), 
+            ("[OPTIONS]", "dim"),
+            ("\n         (The 'openbabelfish' prefix is optional in shell mode)", "dim italic")
+        )
+        console.print(Align.center(usage_text))
+        console.print()
 
         # Description box
-        console.print(Panel(
+        console.print(Align.center(Panel(
             "[dim]A high-performance, fully-offline translation appliance powered by Meta's NLLB-200.\n"
             "Handles model management and hardware acceleration automatically.[/dim]",
             border_style="bright_black",
             expand=False,
-            padding=(0, 2),
-        ))
+            padding=(1, 4),
+        )))
         console.print()
 
-        # ── Hardware Modes ────────────────────────────────────────────────────
-        hw_table = Table(
+        # Unified Table (Centered, Perfectly Symmetrical)
+        options_table = Table(
             box=box.ROUNDED,
-            border_style="blue",
-            header_style="bold blue",
-            show_header=True,
-            padding=(0, 2),
-            expand=False,
-        )
-        hw_table.add_column("🖥  Hardware Flag", style="bold cyan", min_width=16)
-        hw_table.add_column("Behaviour", style="", min_width=50)
-        hw_table.add_row("--cpu", "[dim]Default. Runs on any machine. Reliable and portable.[/dim]")
-        hw_table.add_row("--gpu", "[dim]CUDA acceleration. Requires NVIDIA GPU.\n[yellow]Downloads ~1.2 GB of CUDA runtimes on first use.[/yellow][/dim]")
-        console.print(Padding(hw_table, (0, 2)))
-        console.print()
-
-        # ── Model Management ──────────────────────────────────────────────────
-        mod_table = Table(
-            box=box.ROUNDED,
-            border_style="cyan",
+            border_style="bright_black",
             header_style="bold cyan",
             show_header=True,
-            padding=(0, 2),
             expand=False,
+            padding=(0, 1),
         )
-        mod_table.add_column("📦  Model Flag", style="bold cyan", min_width=22)
-        mod_table.add_column("Behaviour", min_width=50)
-        mod_table.add_row("-m, --model, -model [italic]name[/italic]", "[dim]Load a specific downloaded variant (e.g. [cyan]600M[/cyan], [cyan]1.3B[/cyan]).[/dim]")
-        mod_table.add_row("--add-model [italic]name[/italic]", "[dim]Download a new variant from the Hugging Face registry.[/dim]")
-        mod_table.add_row("--models", "[dim]Show all variants with download status and disk sizes.[/dim]")
-        mod_table.add_row("--packages", "[dim]Audit and install Python dependencies (pip requirements).[/dim]")
-        console.print(Padding(mod_table, (0, 2)))
+        options_table.add_column("Command / Option", style="bold cyan", width=26)
+        options_table.add_column("Description", width=42)
+
+        # Hardware Options
+        options_table.add_row("[bold blue]🖥  Hardware Options[/bold blue]", "")
+        options_table.add_row("--cpu, cpu", "Default. Runs on any machine. Reliable and portable.")
+        options_table.add_row("--gpu, gpu, cuda", "CUDA acceleration. Requires NVIDIA GPU.\nDownloads ~1.2 GB of CUDA runtimes on first use.")
+        options_table.add_section()
+
+        # Model Management
+        options_table.add_row("[bold cyan]📦  Model Management[/bold cyan]", "")
+        options_table.add_row("-m, --model, m, model <name>", "Load a specific downloaded variant (e.g. 600M, 1.3B).")
+        options_table.add_row("--add-model, add, download <name>", "Download a new variant from the Hugging Face registry.")
+        options_table.add_row("--models, models, list", "Show all variants with download status and disk sizes.")
+        options_table.add_row("--packages, packages, pkg, audit", "Audit and install Python dependencies (pip requirements).")
+        options_table.add_section()
+
+        # Translation Options
+        options_table.add_row("[bold green]🌐  Translation Options[/bold green]", "")
+        options_table.add_row("--to, to, target <lang>", "Target language (e.g. spanish, french, japanese).")
+        options_table.add_row("--from, from, source <lang>", "Source language. Auto-detected if omitted.")
+        options_table.add_row("-f, --file, f, file, read <path>", "Read input from a file. Supports: .txt .pdf .docx .pptx .epub")
+        options_table.add_row("-o, --output, o, output, save <path>", "Write the translated text to a file.")
+        options_table.add_row("--ocr, ocr", "Force OCR on PDF files (uses EasyOCR). Auto-detects by default.")
+        options_table.add_row("--ocr-device, ocr-device, ocr_device <dev>", "Set device for OCR engine (cpu or gpu). Defaults to cpu.")
+
+        console.print(Align.center(options_table))
         console.print()
 
-        # ── Translation Options ───────────────────────────────────────────────
-        io_table = Table(
-            box=box.ROUNDED,
-            border_style="green",
-            header_style="bold green",
-            show_header=True,
-            padding=(0, 2),
-            expand=False,
-        )
-        io_table.add_column("🌐  Translation Flag", style="bold cyan", min_width=22)
-        io_table.add_column("Behaviour", min_width=50)
-        io_table.add_row("--to [italic]lang[/italic]", "[dim]Target language (e.g. [cyan]spanish[/cyan], [cyan]french[/cyan], [cyan]japanese[/cyan]).[/dim]")
-        io_table.add_row("--from [italic]lang[/italic]", "[dim]Source language. Auto-detected if omitted.[/dim]")
-        io_table.add_row("-f, --file [italic]path[/italic]", "[dim]Read input text from a local file.[/dim]")
-        io_table.add_row("-o, --output [italic]path[/italic]", "[dim]Write the translated text to a file.[/dim]")
-        console.print(Padding(io_table, (0, 2)))
-        console.print()
-
-        # ── Examples ──────────────────────────────────────────────────────────
-        eg_table = Table(box=box.ROUNDED, border_style="bright_black", show_header=False, padding=(0, 2))
+        # Examples Panel (Centered, cleanly padded, box=None internally)
+        eg_table = Table(box=None, show_header=False, padding=(0, 2))
         eg_table.add_column(style="dim")
+        eg_table.add_row("[bold cyan]✦ Standard CLI Files[/bold cyan]")
         eg_table.add_row("[bold green]openbabelfish[/] -f [italic]path/to/file.txt[/italic] --to japanese")
-        eg_table.add_row("--to spanish  --gpu                    [dim]# Prefix is optional![/dim]")
-        eg_table.add_row("[bold green]openbabelfish[/] --to french -o [italic]saved_translation.txt[/italic]")
-        eg_table.add_row("[bold green]openbabelfish[/] --models                 [dim]# List all variants[/dim]")
-        eg_table.add_row("[bold green]openbabelfish[/] --add-model 1.3B          [dim]# Download new variant[/dim]")
-        eg_table.add_row("-m 1.3B -f [italic]file.txt[/italic] --to arabic --from english")
-        console.print(Panel(eg_table, title="[bold bright_black]✦ Examples[/bold bright_black]", border_style="bright_black", expand=False, padding=(0, 1)))
+        eg_table.add_row("[bold green]openbabelfish[/] -f [italic]document.pdf[/italic] --to spanish --from english")
+        eg_table.add_row("[bold green]openbabelfish[/] -f [italic]scanned.pdf[/italic] --to french --ocr --ocr-device gpu")
+        eg_table.add_row("")
+        eg_table.add_row("[bold cyan]✦ Generalized Commands (REPL / CLI)[/bold cyan]")
+        eg_table.add_row("file [italic]sample_document.docx[/italic] to spanish")
+        eg_table.add_row("read [italic]scanned.pdf[/italic] target french ocr")
+        eg_table.add_row("m 1.3B f [italic]book.epub[/italic] to arabic from english")
+        eg_table.add_row("add 1.3B                               [dim]# Download new NLLB model[/dim]")
+        eg_table.add_row("models                                 [dim]# Show model library[/dim]")
+        eg_table.add_row("packages                               [dim]# Audit packages/dependencies[/dim]")
+        eg_table.add_row("gpu                                    [dim]# Toggle CUDA acceleration[/dim]")
+        eg_table.add_row("")
+        eg_table.add_row("[bold cyan]✦ Quick Direct Translation (REPL)[/bold cyan]")
+        eg_table.add_row("spanish: Hello, how are you today?")
+        eg_table.add_row("hindi: OpenBabelFish is an offline translator.")
+        
+        console.print(Align.center(Panel(
+            eg_table, 
+            title="[bold bright_black]✦ Examples[/bold bright_black]", 
+            border_style="bright_black", 
+            expand=False, 
+            padding=(1, 2)
+        )))
         console.print()
 
         return ""
 
 
-# ── FIRST‑RUN ONBOARDING ──────────────────────────────────────────────────────
-def handle_first_run():
-    console.clear()
-    _print_logo()
-    console.print(Panel(
-        f"[bold bright_cyan]Welcome to OpenBabelFish![/]\n"
-        f"[dim]Storage Location: [cyan]{BASE_DIR}[/][/dim]",
-        box=box.DOUBLE_EDGE,
-        border_style="cyan",
-        expand=False,
-        padding=(1, 4),
-    ))
+# ── SYSTEM SANITY & ONBOARDING ───────────────────────────────────────────────
+def prompt_and_download_nllb(config, model_mgr):
+    """Prompt the user to select and download an NLLB variant."""
     console.print()
-
-    # 1. GPU Detection
-    dep_mgr = DependencyManager()
-    is_gpu = False
-    try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            console.print(Panel(
-                f"[bold green]✓  NVIDIA GPU Detected[/]\n"
-                f"[dim]Device: [cyan]{gpu_name}[/cyan][/dim]",
-                border_style="green",
-                expand=False,
-                padding=(0, 2),
-            ))
-            if Confirm.ask("\n  Enable GPU acceleration? [dim](Downloads ~1.2 GB once)[/dim]", default=True):
-                if dep_mgr.install_gpu_support():
-                    is_gpu = True
-                    console.print(Panel("[bold green]✓  GPU Acceleration Ready[/]", border_style="green", expand=False))
-    except Exception:
-        console.print("[dim]  No NVIDIA GPU detected — using CPU mode.[/dim]")
-    
-    console.print()
-
-    # 2. Model Selection
-    _print_divider("Select Your Model")
-    model_mgr = ModelManager()
+    console.print(Align.center(Text("⚠  No translation model configured or model is missing/incomplete.", style="bold yellow")))
     variants = list(model_mgr.get_available_variants().keys())
-
+    
     sel_table = Table(box=box.ROUNDED, border_style="cyan", show_header=True, header_style="bold cyan", padding=(0, 2))
     sel_table.add_column("#", style="bold cyan", justify="center", width=3)
     sel_table.add_column("Variant", style="bold white")
     sel_table.add_column("Size & Description", style="dim")
     for i, v in enumerate(variants, 1):
         sel_table.add_row(str(i), v, VARIANT_INFO[v])
-    console.print(Padding(sel_table, (1, 2)))
+    console.print(Align.center(sel_table))
 
-    idx = Prompt.ask("\n  [bold]Choose variant[/]", choices=[str(i) for i in range(1, len(variants)+1)], default="1")
+    idx = Prompt.ask("\n  [bold]Choose NLLB variant to download[/]", choices=[str(i) for i in range(1, len(variants)+1)], default="1")
     choice = variants[int(idx) - 1]
-    console.print(f"\n  [green]✓[/] Selected: [bold cyan]{choice}[/]\n")
+    console.print()
+    console.print(Align.center(Text.assemble(
+        ("✓  ", "bold green"),
+        ("Selected: ", ""),
+        (choice, "bold cyan")
+    )))
+    console.print()
 
     model_mgr.download_model(choice)
 
-    config = {
-        "model_variant": choice,
-        "model_path": str(get_model_path(choice).absolute()),
-        "device": "cuda" if is_gpu else "cpu",
-        "quantization": "int8"
-    }
+    config["model_variant"] = choice
+    config["model_path"] = str(get_model_path(choice).absolute())
+    if "quantization" not in config:
+        config["quantization"] = "int8"
+    if "device" not in config:
+        is_gpu = False
+        try:
+            import torch
+            is_gpu = torch.cuda.is_available()
+        except Exception:
+            pass
+        config["device"] = "cuda" if is_gpu else "cpu"
     save_config(config)
-    console.print(Panel(
-        "[bold green]✓  OpenBabelFish is ready![/]\n"
-        "[dim]Your offline translation engine is configured and waiting.[/dim]",
-        border_style="green",
-        expand=False,
-        padding=(1, 4),
-    ))
-    console.print()
+
+def ensure_system_sanity(config, model_mgr, dep_mgr):
+    """
+    Ensures all dependencies, OCR models, and at least one translation model are present.
+    If anything is missing, downloads it.
+    """
+    # Check if this is the first start (config file doesn't exist yet)
+    if not CONFIG_FILE.exists():
+        console.clear()
+        _print_logo()
+        console.print(Align.center(Panel(
+            f"[bold bright_cyan]Welcome to OpenBabelFish![/]\n"
+            f"[dim]Storage Location: [cyan]{BASE_DIR}[/][/dim]",
+            box=box.DOUBLE_EDGE,
+            border_style="cyan",
+            expand=False,
+            padding=(1, 4),
+        )))
+        console.print()
+        
+        # GPU Detection and prompt
+        is_gpu = False
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                console.print(Align.center(Panel(
+                    f"[bold green]✓  NVIDIA GPU Detected[/]\n"
+                    f"[dim]Device: [cyan]{gpu_name}[/cyan][/dim]",
+                    border_style="green",
+                    expand=False,
+                    padding=(1, 4),
+                )))
+                if Confirm.ask("\n  Enable GPU acceleration? [dim](Downloads ~1.2 GB once)[/dim]", default=True):
+                    if dep_mgr.install_gpu_support():
+                        is_gpu = True
+                        console.print(Align.center(Panel("[bold green]✓  GPU Acceleration Ready[/]", border_style="green", expand=False, padding=(0, 2))))
+        except Exception:
+            console.print(Align.center(Text("No NVIDIA GPU detected — using CPU mode.", style="dim")))
+        
+        config["device"] = "cuda" if is_gpu else "cpu"
+        save_config(config)
+        console.print()
+
+    # 1. Audit packages and download missing ones automatically
+    results = dep_mgr.check_dependencies()
+    missing_packages = []
+    for r in results:
+        # Check Core, Document, and OCR categories. Optional is fine.
+        if r["status"] != "installed" and "Optional" not in r["group"] and "Utility" not in r["group"]:
+            missing_packages.append(r["package"])
+            
+    if missing_packages:
+        console.print(f"\n[bold yellow]⚠  Missing required packages detected: {', '.join(missing_packages)}[/bold yellow]")
+        console.print("[dim]Installing missing dependencies...[/dim]")
+        dep_mgr.install_missing(missing_packages)
+
+    # 2. Check OCR models if easyocr is installed
+    if dep_mgr.is_ocr_installed():
+        ocr_model_dir = Path(os.path.expanduser('~')) / '.EasyOCR' / 'model'
+        detector_file = ocr_model_dir / 'craft_mlt_25k.pth'
+        recognition_file = ocr_model_dir / 'english_g2.pth'
+        
+        if not detector_file.exists() or not recognition_file.exists():
+            # Clean up corrupted partial downloads to avoid zlib decompression errors
+            if ocr_model_dir.exists():
+                for zip_file in ocr_model_dir.glob("*.zip"):
+                    try:
+                        zip_file.unlink()
+                    except Exception:
+                        pass
+                for pth_file in [detector_file, recognition_file]:
+                    if not pth_file.exists():
+                        try:
+                            pth_file.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
+            console.print("\n[bold cyan]📥  Pre-downloading OCR models (~100-200 MB)... This only happens once.[/bold cyan]")
+            try:
+                import subprocess
+                cmd = [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.reconfigure(encoding='utf-8') if sys.platform=='win32' else None; import easyocr; easyocr.Reader(['en'], gpu=False)"
+                ]
+                subprocess.check_call(cmd)
+                console.print("[bold green]✓  OCR models downloaded successfully![/bold green]\n")
+            except Exception as e:
+                console.print(f"[bold red]✗  Failed to pre-download OCR models:[/] {e}")
+
+    # 3. Check NLLB model
+    active_model = config.get("model_variant")
+    if not active_model or model_mgr.get_model_status(active_model) != "DOWNLOADED":
+        prompt_and_download_nllb(config, model_mgr)
 
 
 def _build_parser(safe=False) -> argparse.ArgumentParser:
@@ -240,6 +324,9 @@ def _build_parser(safe=False) -> argparse.ArgumentParser:
     p.add_argument("--packages", action="store_true")
     p.add_argument("--gpu", action="store_true")
     p.add_argument("--cpu", action="store_true")
+    p.add_argument("--ocr", action="store_true", help="Force OCR on PDF files")
+    p.add_argument("--ocr-device", choices=["cpu", "gpu"], help="Set device for OCR (default: cpu)")
+    p.add_argument("--translate", "-t", action="store_true", help="Start interactive translation mode")
     p.add_argument("--help", "-h", action="help" if not safe else "store_true")
     p.add_argument("text", nargs="*", help="Direct text to translate")
     return p
@@ -247,16 +334,23 @@ def _build_parser(safe=False) -> argparse.ArgumentParser:
 
 def _run_translation(args, config, model_mgr, dep_mgr):
     """Core translation logic extracted for reuse in CLI and REPL."""
+    ensure_system_sanity(config, model_mgr, dep_mgr)
+    config = load_config()
+
+    if getattr(args, 'ocr_device', None):
+        config["ocr_device"] = args.ocr_device
+        save_config(config)
+
     # Hardware switching (updates both local state and session config)
     current_device = config.get("device", "cpu")
     
     if args.gpu:
         if not dep_mgr.is_gpu_installed():
-            console.print(Panel(
-                "[yellow]CUDA libraries not found.[/]\n"
+            console.print(Align.center(Panel(
+                "[bold yellow]CUDA libraries not found.[/]\n"
                 "[dim]OpenBabelFish needs to download ~1.2 GB of NVIDIA runtimes.[/dim]",
-                border_style="yellow", expand=False, padding=(0, 2)
-            ))
+                border_style="yellow", expand=False, padding=(1, 2)
+            )))
             if Confirm.ask("  Download GPU libraries now?"):
                 if dep_mgr.install_gpu_support():
                     current_device = "cuda"
@@ -282,16 +376,14 @@ def _run_translation(args, config, model_mgr, dep_mgr):
     model_path = get_model_path(model_variant)
     if model_path:
         config["model_path"] = str(model_path.absolute())
-        # We don't save_config here every time to avoid redundant writes, 
-        # but we ensure model_path is tracked.
 
     model_status = model_mgr.get_model_status(model_variant)
     if model_status != "DOWNLOADED":
         status_label = "incomplete" if model_status == "INCOMPLETE" else "not downloaded"
-        console.print(Panel(
-            f"[yellow]Model '{model_variant}' is {status_label}.[/]",
-            border_style="yellow", expand=False
-        ))
+        console.print(Align.center(Panel(
+            f"[bold yellow]Model '{model_variant}' is {status_label}.[/]",
+            border_style="yellow", expand=False, padding=(1, 2)
+        )))
         if Confirm.ask(f"  {'Fix' if model_status == 'INCOMPLETE' else 'Download'} {model_variant} now?"):
             model_mgr.download_model(model_variant)
         else:
@@ -302,9 +394,20 @@ def _run_translation(args, config, model_mgr, dep_mgr):
     if args.file:
         file_path = args.file.strip('"\'')
         try:
-            text = Path(file_path).read_text(encoding="utf-8")
+            from .extractors import FileExtractor, SUPPORTED_EXTENSIONS, ExtractionError
+            ext = Path(file_path).suffix.lower()
+            if ext in SUPPORTED_EXTENSIONS:
+                extractor = FileExtractor(dep_mgr)
+                force_ocr = getattr(args, 'ocr', False)
+                text = extractor.extract(file_path, force_ocr=force_ocr)
+            else:
+                # Fallback: try reading as plain text for unknown extensions
+                text = Path(file_path).read_text(encoding="utf-8")
         except FileNotFoundError:
-            console.print(Panel(f"[red]File not found:[/] {file_path}", border_style="red", expand=False))
+            console.print(Align.center(Panel(f"[bold red]File not found:[/] {file_path}", border_style="red", expand=False, padding=(1, 2))))
+            return
+        except ExtractionError as e:
+            console.print(Align.center(Panel(f"[bold red]Extraction Error:[/] {e}", border_style="red", expand=False, padding=(1, 2))))
             return
     elif not sys.stdin.isatty():
         text = sys.stdin.read()
@@ -313,9 +416,24 @@ def _run_translation(args, config, model_mgr, dep_mgr):
     
     if not text.strip():
         # Check if we just did a hardware switch or model switch without text
-        if args.gpu or args.cpu or args.model or args.add_model:
+        if args.gpu or args.cpu or args.model or args.add_model or getattr(args, 'ocr_device', None):
             hw_name = "⚡ CUDA (GPU)" if current_device == "cuda" else "⚙  CPU"
-            console.print(f"\n  [bold green]✓[/] Mode set to [bold cyan]{hw_name}[/] (Model: [bold magenta]{model_variant}[/])\n")
+            console.print()
+            console.print(Align.center(Text.assemble(
+                ("✓  ", "bold green"),
+                ("Mode set to ", ""),
+                (hw_name, "bold cyan"),
+                (" (Model: ", ""),
+                (model_variant, "bold magenta"),
+                (")", "")
+            )))
+            if getattr(args, 'ocr_device', None):
+                console.print(Align.center(Text.assemble(
+                    ("✓  ", "bold green"),
+                    ("OCR device set to ", ""),
+                    (args.ocr_device.upper(), "bold cyan")
+                )))
+            console.print()
             return
 
         # Otherwise show standard help/logo (but skip logo if in REPL session)
@@ -323,7 +441,7 @@ def _run_translation(args, config, model_mgr, dep_mgr):
         if not is_repl:
             _print_logo()
         
-        console.print(Panel(
+        console.print(Align.center(Panel(
             "[bold yellow]⚠  No input text detected.[/] \n\n"
             "[dim]Please use [cyan]--file path/to/file[/cyan] to translate a file,\n"
             "or type [cyan]--help[/cyan] to see available flags.\n\n"
@@ -331,68 +449,115 @@ def _run_translation(args, config, model_mgr, dep_mgr):
             border_style="bright_black",
             expand=False,
             padding=(1, 4),
-        ))
+        )))
         return
 
     if not args.target_lang:
-        console.print(Panel("[red]✗  Please specify a target language with [cyan]--to[/cyan][/red]", border_style="red", expand=False))
+        console.print(Align.center(Panel("[bold red]✗  Please specify a target language with [cyan]--to[/cyan][/bold red]", border_style="red", expand=False, padding=(1, 2))))
         return
 
-    # Translation execution
-    try:
-        with console.status("[bold cyan]Initializing Engine...[/]", spinner="arc"):
-            engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
+    # Check if stdout is a TTY to select interface style
+    is_tty = sys.stdout.isatty()
 
-        src_label = args.source_lang or "auto"
-        hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
+    if is_tty:
+        try:
+            with console.status("[bold cyan]Initializing Engine...[/]", spinner="arc"):
+                engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
 
-        meta_table = Table.grid(padding=(0, 3))
-        meta_table.add_column(style="dim")
-        meta_table.add_column()
-        meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
-        meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
-        meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
-        meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
+            src_label = args.source_lang or "auto"
+            hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
 
-        console.print()
-        console.print(Panel(
-            meta_table,
-            title="[bold]🐡  OpenBabelFish[/bold]",
-            subtitle="[dim]translation in progress…[/dim]",
-            border_style="cyan",
-            expand=False,
-            padding=(1, 2),
-        ))
-        console.print()
-        _print_divider("Output")
-        console.print()
+            meta_table = Table.grid(padding=(0, 3))
+            meta_table.add_column(style="dim")
+            meta_table.add_column()
+            meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
+            meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
+            meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
+            meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
 
-        result_chunks = []
-        for chunk in engine.translate(text, args.target_lang, args.source_lang):
-            result_chunks.append(chunk)
-            console.print(chunk, end="", highlight=False)
-        console.print("\n")
-
-        if args.output:
-            out_path = args.output.strip('"\'')
-            Path(out_path).write_text("".join(result_chunks), encoding="utf-8")
-            console.print(Panel(
-                f"[green]✓  Saved to:[/] [cyan]{out_path}[/]",
-                border_style="green",
+            console.print()
+            console.print(Align.center(Panel(
+                meta_table,
+                title="[bold]🐡  OpenBabelFish[/bold]",
+                subtitle="[dim]translation in progress…[/dim]",
+                border_style="cyan",
                 expand=False,
-            ))
+                padding=(0, 2),
+            )))
             console.print()
 
-    except Exception as e:
-        console.print(Panel(
-            f"[bold red]✗  Translation Error[/]\n[dim]{e}[/dim]",
-            border_style="red",
-            expand=False,
-            padding=(1, 2),
-        ))
+            result_chunks = []
+            translated_text = ""
+            
+            with Live(Text(""), console=console, refresh_per_second=10) as live:
+                for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                    result_chunks.append(chunk)
+                    translated_text += chunk
+                    live.update(Panel(
+                        Text(translated_text, style="bright_green"),
+                        title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
+                        title_align="center",
+                        border_style="green",
+                        box=box.ROUNDED,
+                        expand=True,
+                        padding=(1, 2)
+                    ))
+            
+            console.print()
+
+            if args.output:
+                out_path = args.output.strip('"\'')
+                p = Path(out_path)
+                if p.is_dir():
+                    if args.file:
+                        input_name = Path(args.file.strip('"\'')).stem
+                        out_path = str(p / f"{input_name}_translated.txt")
+                    else:
+                        out_path = str(p / "translation.txt")
+                Path(out_path).write_text(translated_text, encoding="utf-8")
+                console.print(Align.center(Panel(
+                    f"[green]✓  Saved to:[/] [cyan]{out_path}[/]",
+                    border_style="green",
+                    expand=False,
+                    padding=(0, 2)
+                )))
+                console.print()
+
+        except Exception as e:
+            console.print(Align.center(Panel(
+                f"[bold red]✗  Translation Error[/]\n[dim]{e}[/dim]",
+                border_style="red",
+                expand=False,
+                padding=(1, 2),
+            )))
+    else:
+        # Non-interactive CLI mode (pipes / redirects)
+        try:
+            engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
+            result_chunks = []
+            for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                result_chunks.append(chunk)
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+            
+            if args.output:
+                out_path = args.output.strip('"\'')
+                p = Path(out_path)
+                if p.is_dir():
+                    if args.file:
+                        input_name = Path(args.file.strip('"\'')).stem
+                        out_path = str(p / f"{input_name}_translated.txt")
+                    else:
+                        out_path = str(p / "translation.txt")
+                Path(out_path).write_text("".join(result_chunks), encoding="utf-8")
+        except Exception as e:
+            sys.stderr.write(f"Translation Error: {e}\n")
+            sys.exit(1)
 
 
-def interactive_shell():
+
+
+def interactive_shell(start_translate=False, target_lang=None, source_lang=None):
     """High-fidelity interactive REPL using Rich."""
     # Mark the session so _run_translation knows we are in a REPL
     sys._openbabelfish_repl = True
@@ -401,45 +566,200 @@ def interactive_shell():
     model_mgr = ModelManager()
     dep_mgr = DependencyManager()
 
+    ensure_system_sanity(config, model_mgr, dep_mgr)
+    config = load_config()
+
     console.clear()
     _print_logo()
     
-    # Session info
+    # Session info (Centered)
     active_model = config.get("model_variant", "None")
     active_device = config.get("device", "cpu").upper()
     
-    console.print(Padding(
-        Text.assemble(
-            ("Session Active ", "bold bright_black"),
-            (f"[{active_model}] ", "bold cyan"),
-            (f"[{active_device}] ", "bold green"),
-            (f"({BASE_DIR})", "dim italic")
-        ),
-        (0, 2)
-    ))
-    console.print(Padding("[dim]Type [cyan]exit[/] to quit. Use [cyan]--help[/] for options.[/dim]", (0, 2)))
+    session_info = Text.assemble(
+        ("Session Active ", "bold bright_black"),
+        (f"[{active_model}] ", "bold cyan"),
+        (f"[{active_device}] ", "bold green"),
+        (f"({BASE_DIR})", "dim italic")
+    )
+    console.print(Align.center(session_info))
+    console.print(Align.center(Text("Type exit to quit. Use --help for options.", style="dim")))
     console.print()
 
     # Pre-configure parser for the REPL
     shell_parser = _build_parser(safe=True)
 
+    # Autocomplete mappings and setup
+    cmd_mappings = {
+        'help': '--help', 'h': '--help', '?': '--help',
+        'models': '--models', 'list': '--models',
+        'packages': '--packages', 'pkg': '--packages', 'audit': '--packages',
+        'gpu': '--gpu', 'cuda': '--gpu',
+        'cpu': '--cpu',
+        'ocr': '--ocr',
+        'ocr-device': '--ocr-device', 'ocr_device': '--ocr-device',
+        'to': '--to', 'target': '--to',
+        'from': '--from', 'source': '--from',
+        'file': '--file', 'f': '--file', 'read': '--file',
+        'output': '--output', 'o': '--output', 'save': '--output',
+        'add-model': '--add-model', 'add': '--add-model', 'download': '--add-model',
+        'model': '--model', 'm': '--model',
+        'translate': '--translate', 't': '--translate'
+    }
+
+    try:
+        import readline
+        completion_words = sorted(list(cmd_mappings.keys()) + [
+            'exit', 'quit', '--to', '--from', '--file', '--output', '--model', 
+            '--add-model', '--models', '--packages', '--gpu', '--cpu', '--ocr', '--ocr-device', '--help', '--translate'
+        ])
+        
+        def completer(text, state):
+            options = [w for w in completion_words if w.startswith(text)]
+            if state < len(options):
+                return options[state]
+            return None
+            
+        readline.set_completer(completer)
+        if 'libedit' in readline.__doc__:
+            readline.parse_and_bind("bind ^I rl_complete")
+        else:
+            readline.parse_and_bind("tab: complete")
+        readline.set_completer_delims(' \t\n;')
+    except Exception:
+        pass
+
+    # Translation mode states
+    in_translation_mode = start_translate
+    mode_from_lang = source_lang
+    mode_to_lang = target_lang
+
+    if in_translation_mode:
+        if not mode_from_lang:
+            mode_from_lang = Prompt.ask("\n  [bold cyan]Enter input (source) language[/] [dim](press Enter for auto-detect)[/]").strip()
+            if not mode_from_lang:
+                mode_from_lang = "auto"
+        if not mode_to_lang:
+            mode_to_lang = Prompt.ask("  [bold cyan]Enter output (target) language[/] (e.g. spanish, french, hindi)").strip()
+        if not mode_to_lang:
+            in_translation_mode = False
+            console.print("[yellow]⚠  Output (target) language required to enter translation mode.[/yellow]\n")
+        else:
+            console.print()
+            console.print(Align.center(Panel(
+                Text.assemble(
+                    ("Interactive Translation Mode Active!\n", "bold green"),
+                    (f"Direction: {mode_from_lang} ❯ {mode_to_lang}\n", "cyan"),
+                    ("Type any sentence to translate. Type another command or 'exit' to quit this mode.", "dim")
+                ),
+                border_style="green",
+                expand=False,
+                padding=(1, 2)
+            )))
+            console.print()
+
     while True:
         try:
-            user_input = Prompt.ask(
-                Text.assemble(("openbabelfish", "bold cyan"), (" ❯", "bold bright_black"))
-            ).strip()
+            if in_translation_mode:
+                prompt_text = Text.assemble(
+                    ("openbabelfish [", "bold cyan"),
+                    (f"{mode_from_lang} ❯ {mode_to_lang}", "bold magenta"),
+                    ("] ❯ ", "bold bright_black")
+                )
+            else:
+                prompt_text = Text.assemble(
+                    ("openbabelfish", "bold cyan"),
+                    (" ❯ ", "bold bright_black")
+                )
+
+            user_input = console.input(prompt_text).strip()
             
             if not user_input:
                 continue
                 
             if user_input.lower() in ["exit", "quit"]:
+                if in_translation_mode:
+                    in_translation_mode = False
+                    console.print("[yellow]✓ Exited interactive translation mode.[/yellow]\n")
+                    continue
                 console.print("[dim]Goodbye![/]")
                 break
-                
-            if user_input.startswith("-"):
+
+            # Parse user input into tokens
+            try:
+                tokens = shlex.split(user_input)
+            except ValueError as e:
+                console.print(Align.center(Text(f"Command Error: {e}", style="bold red")))
+                continue
+
+            if not tokens:
+                continue
+
+            first_token_lower = tokens[0].lower()
+            
+            # Check if this is a direct translation prompt (e.g. "spanish: hello")
+            is_direct_translation = ":" in user_input and not user_input.startswith("-") and first_token_lower.split(":")[0] not in cmd_mappings
+
+            # Check if input is a command that should exit translation mode
+            is_command = False
+            if first_token_lower.startswith("-") or first_token_lower in cmd_mappings:
+                is_command = True
+
+            if in_translation_mode and not is_command and not is_direct_translation:
+                # Run translation for this text directly
+                class DummyArgs:
+                    pass
+                args = DummyArgs()
+                args.target_lang = mode_to_lang
+                args.source_lang = None if mode_from_lang == "auto" else mode_from_lang
+                args.file = None
+                args.output = None
+                args.model = None
+                args.add_model = None
+                args.models = False
+                args.packages = False
+                args.gpu = False
+                args.cpu = False
+                args.ocr = False
+                args.ocr_device = None
+                args.text = [user_input]
+                _run_translation(args, config, model_mgr, dep_mgr)
+                continue
+
+            if in_translation_mode and is_command:
+                in_translation_mode = False
+                console.print("[yellow]✓ Exited interactive translation mode.[/yellow]\n")
+
+            if not is_direct_translation:
+                # Perform generalization of tokens
+                generalized_tokens = []
+                for token in tokens:
+                    lower_token = token.lower()
+                    if lower_token in cmd_mappings:
+                        generalized_tokens.append(cmd_mappings[lower_token])
+                    else:
+                        generalized_tokens.append(token)
+
+                # If first token doesn't start with dash (not mapped and not a standard option)
+                if generalized_tokens and not generalized_tokens[0].startswith("-"):
+                    first_word_clean = tokens[0].lower().lstrip('-')
+                    all_possible_inputs = sorted(list(cmd_mappings.keys()) + [
+                        'exit', 'quit', '--to', '--from', '--file', '--output', '--model', 
+                        '--add-model', '--models', '--packages', '--gpu', '--cpu', '--ocr', '--ocr-device', '--help', '--translate'
+                    ])
+                    import difflib
+                    close_matches = difflib.get_close_matches(first_word_clean, all_possible_inputs, n=3, cutoff=0.5)
+                    prefix_matches = [w for w in all_possible_inputs if w.startswith(first_word_clean)]
+                    suggestions = sorted(list(set(close_matches + prefix_matches)))
+                    if suggestions:
+                        console.print(Align.center(Text(f"Did you mean: {', '.join(suggestions)}?", style="bold yellow")))
+                    else:
+                        console.print(Align.center(Text(f"Unrecognized command: '{tokens[0]}'. Type 'help' for options.", style="bold red")))
+                    continue
+
                 # Parse as arguments
                 try:
-                    args = shell_parser.parse_args(shlex.split(user_input))
+                    args = shell_parser.parse_args(generalized_tokens)
                     
                     if args.help:
                         shell_parser.print_help()
@@ -458,28 +778,60 @@ def interactive_shell():
                         model_mgr.download_model(args.add_model)
                         continue
 
+                    if getattr(args, 'translate', False):
+                        in_translation_mode = True
+                        mode_from_lang = args.source_lang
+                        mode_to_lang = args.target_lang
+                        
+                        # Prompt input (source) lang if not specified
+                        if not mode_from_lang:
+                            mode_from_lang = Prompt.ask("\n  [bold cyan]Enter input (source) language[/] [dim](press Enter for auto-detect)[/]").strip()
+                            if not mode_from_lang:
+                                mode_from_lang = "auto"
+                        
+                        # Prompt output (target) lang if not specified
+                        if not mode_to_lang:
+                            mode_to_lang = Prompt.ask("  [bold cyan]Enter output (target) language[/] (e.g. spanish, french, hindi)").strip()
+                        if not mode_to_lang:
+                            in_translation_mode = False
+                            console.print("[yellow]⚠  Output (target) language required to enter translation mode.[/yellow]\n")
+                            continue
+                                
+                        if in_translation_mode:
+                            console.print()
+                            console.print(Align.center(Panel(
+                                Text.assemble(
+                                    ("Interactive Translation Mode Active!\n", "bold green"),
+                                    (f"Direction: {mode_from_lang} ❯ {mode_to_lang}\n", "cyan"),
+                                    ("Type any sentence to translate. Type another command or 'exit' to quit this mode.", "dim")
+                                ),
+                                border_style="green",
+                                expand=False,
+                                padding=(1, 2)
+                            )))
+                            console.print()
+                        continue
+
                     _run_translation(args, config, model_mgr, dep_mgr)
                 except argparse.ArgumentError as e:
-                    console.print(f"[bold red]Usage Error:[/] {e}")
+                    console.print(Align.center(Text(f"Usage Error: {e}", style="bold red")))
                 except Exception as e:
-                    console.print(f"[bold red]Command Error:[/] {e}")
+                    console.print(Align.center(Text(f"Command Error: {e}", style="bold red")))
             else:
                 # Direct text translation (Quick mode)
-                # We need at least a target language. 
-                # Check if it was prefixed with a lang like "spanish: Hello world"
                 if ":" in user_input:
                     lang, text = user_input.split(":", 1)
                     args = shell_parser.parse_args(["--to", lang.strip()])
                     args.text = [text.strip()]
                     _run_translation(args, config, model_mgr, dep_mgr)
                 else:
-                    console.print("[yellow]⚠  Quick prompt requires a language. Try: [cyan]spanish: Hello[/cyan][/yellow]")
+                    console.print(Align.center(Text("⚠  Quick prompt requires a language. Try: 'spanish: Hello'", style="bold yellow")))
 
         except KeyboardInterrupt:
             console.print("\n[dim]Stopping session...[/]")
             break
         except Exception as e:
-            console.print(f"[bold red]Shell Error:[/] {e}")
+            console.print(Align.center(Text(f"Shell Error: {e}", style="bold red")))
 
 
 def _handle_models_command(model_mgr, config):
@@ -509,9 +861,14 @@ def _handle_models_command(model_mgr, config):
         active_mark = "[bold cyan]★ Yes[/]" if v == active else ""
         t.add_row(v, status, info, active_mark)
 
-    console.print(Padding(t, (1, 2)))
-    console.print(Padding(f"[dim]Library Path: [cyan]{BASE_DIR}[/][/dim]", (0, 2)))
-    console.print(Padding("[dim]Use [cyan]--add-model[/cyan] to download more. Use [cyan]--model[/cyan] to switch.[/dim]", (0, 2)))
+    console.print()
+    console.print(Align.center(t))
+    console.print()
+    console.print(Align.center(Text.assemble(
+        ("Library Path: ", "dim"),
+        (f"{BASE_DIR}", "cyan"),
+    )))
+    console.print(Align.center(Text("Use --add-model to download more. Use --model to switch.", style="dim")))
     console.print()
 
 
@@ -547,25 +904,45 @@ def _handle_packages_command(dep_mgr):
         
         t.add_row(display_group, r["package"], r["required"], r["installed"], status_icon)
 
-    console.print(Padding(t, (1, 2)))
+    console.print()
+    console.print(Align.center(t))
+    console.print()
     
     # Smart prompts based on what's missing
     if missing_core:
-         console.print(Padding(f"[bold red]⚠ Critical Core packages are missing: {', '.join(missing_core)}[/]", (0, 2)))
+         console.print(Align.center(Text(f"⚠ Critical Core packages are missing: {', '.join(missing_core)}", style="bold red")))
          if Confirm.ask("  Install core requirements now?"):
              dep_mgr.install_missing(missing_core)
     
     if missing_gpu:
-         console.print(Padding(f"[yellow]⚠ GPU Acceleration runtimes are missing: {', '.join(missing_gpu)}[/]", (0, 2)))
+         console.print(Align.center(Text(f"⚠ GPU Acceleration runtimes are missing: {', '.join(missing_gpu)}", style="bold yellow")))
          if Confirm.ask("  Install NVIDIA GPU runtimes?"):
              dep_mgr.install_missing(missing_gpu)
 
     if not missing_core and not missing_gpu:
-        console.print(Padding("[bold green]✓ Complete system audit passed. All modules synchronized.[/]", (0, 2)))
+        console.print(Align.center(Text("✓ Complete system audit passed. All modules synchronized.", style="bold green")))
     console.print()
 
 
 def main():
+    # Map of generalized commands
+    cmd_mappings = {
+        'help': '--help', 'h': '--help', '?': '--help',
+        'models': '--models', 'list': '--models',
+        'packages': '--packages', 'pkg': '--packages', 'audit': '--packages',
+        'gpu': '--gpu', 'cuda': '--gpu',
+        'cpu': '--cpu',
+        'ocr': '--ocr',
+        'ocr-device': '--ocr-device', 'ocr_device': '--ocr-device',
+        'to': '--to', 'target': '--to',
+        'from': '--from', 'source': '--from',
+        'file': '--file', 'f': '--file', 'read': '--file',
+        'output': '--output', 'o': '--output', 'save': '--output',
+        'add-model': '--add-model', 'add': '--add-model', 'download': '--add-model',
+        'model': '--model', 'm': '--model',
+        'translate': '--translate', 't': '--translate'
+    }
+
     # Standard CLI Mode
     parser = _build_parser(safe=False)
     # If no arguments are passed, enter interactive mode
@@ -573,7 +950,16 @@ def main():
         interactive_shell()
         return
 
-    args = parser.parse_args()
+    # Perform generalization of CLI arguments
+    cli_args = []
+    for arg in sys.argv[1:]:
+        lower_arg = arg.lower()
+        if lower_arg in cmd_mappings:
+            cli_args.append(cmd_mappings[lower_arg])
+        else:
+            cli_args.append(arg)
+
+    args = parser.parse_args(cli_args)
     
     config = load_config()
     model_mgr = ModelManager()
@@ -595,14 +981,22 @@ def main():
         _handle_packages_command(dep_mgr)
         return
 
-    # Priority 3: Setup and Downloads
-    if not is_setup_complete() and not args.add_model:
-        handle_first_run()
-        config = load_config()
+    # Setup is handled dynamically on execution or REPL start.
 
     if args.add_model:
         _print_divider(f"Downloading {args.add_model}")
         model_mgr.download_model(args.add_model)
+        return
+
+    if getattr(args, 'translate', False):
+        if args.gpu:
+            if dep_mgr.is_gpu_installed():
+                config["device"] = "cuda"
+                save_config(config)
+        elif args.cpu:
+            config["device"] = "cpu"
+            save_config(config)
+        interactive_shell(start_translate=True, target_lang=args.target_lang, source_lang=args.source_lang)
         return
 
     # Standard translation workflow

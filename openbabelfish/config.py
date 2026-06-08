@@ -39,7 +39,8 @@ DEFAULT_CONFIG = {
     "model_variant": None,
     "model_path": None,
     "device": "cpu",
-    "quantization": "int8"
+    "quantization": "int8",
+    "ocr_device": "cpu"
 }
 
 def load_config():
