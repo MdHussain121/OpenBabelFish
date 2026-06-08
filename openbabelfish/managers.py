@@ -57,6 +57,7 @@ REQUIRED_PACKAGES = {
     "GPU Acceleration (Optional)": {
         "torch": ">=2.0",
         "nvidia-cublas-cu12": ">=12.0",
+        "nvidia-cuda-runtime-cu12": ">=12.0",
         "nvidia-cudnn-cu12": ">=8.0"
     },
     "Document Extraction (Auto-installed)": {

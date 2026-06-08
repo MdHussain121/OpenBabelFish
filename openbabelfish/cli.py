@@ -524,8 +524,13 @@ def _run_translation(args, config, model_mgr, dep_mgr):
                 console.print()
 
         except Exception as e:
+            err_msg = str(e)
+            if sys.platform == "win32" and "cublas" in err_msg:
+                err_msg += "\n\n[yellow]Hint: On Windows, GPU acceleration requires CUDA runtime DLLs. " \
+                           "Please run [bold cyan]openbabelfish --packages[/bold cyan] and choose to install/repair " \
+                           "GPU dependencies to solve this issue.[/yellow]"
             console.print(Align.center(Panel(
-                f"[bold red]✗  Translation Error[/]\n[dim]{e}[/dim]",
+                f"[bold red]✗  Translation Error[/]\n[dim]{err_msg}[/dim]",
                 border_style="red",
                 expand=False,
                 padding=(1, 2),
@@ -551,7 +556,10 @@ def _run_translation(args, config, model_mgr, dep_mgr):
                         out_path = str(p / "translation.txt")
                 Path(out_path).write_text("".join(result_chunks), encoding="utf-8")
         except Exception as e:
-            sys.stderr.write(f"Translation Error: {e}\n")
+            err_msg = str(e)
+            if sys.platform == "win32" and "cublas" in err_msg:
+                err_msg += "\nHint: On Windows, GPU acceleration requires CUDA runtime DLLs. Run 'openbabelfish --packages' to install them."
+            sys.stderr.write(f"Translation Error: {err_msg}\n")
             sys.exit(1)
 
 
