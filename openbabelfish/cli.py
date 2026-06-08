@@ -461,49 +461,68 @@ def _run_translation(args, config, model_mgr, dep_mgr):
 
     if is_tty:
         try:
-            with console.status("[bold cyan]Initializing Engine...[/]", spinner="arc"):
-                engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
-
-            src_label = args.source_lang or "auto"
-            hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
-
-            meta_table = Table.grid(padding=(0, 3))
-            meta_table.add_column(style="dim")
-            meta_table.add_column()
-            meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
-            meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
-            meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
-            meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
-
-            console.print()
-            console.print(Align.center(Panel(
-                meta_table,
-                title="[bold]🐡  OpenBabelFish[/bold]",
-                subtitle="[dim]translation in progress…[/dim]",
-                border_style="cyan",
-                expand=False,
-                padding=(0, 2),
-            )))
-            console.print()
+            # Check for cached engine in REPL mode
+            engine = None
+            is_repl = hasattr(sys, '_openbabelfish_repl') and sys._openbabelfish_repl
+            if is_repl and hasattr(sys, '_openbabelfish_engine') and sys._openbabelfish_engine:
+                cached = sys._openbabelfish_engine
+                if cached.device == current_device and cached.model_path == str(model_path.absolute()):
+                    engine = cached
+                    
+            if engine is None:
+                with console.status("[bold cyan]Initializing Engine...[/]", spinner="arc"):
+                    engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
+                if is_repl:
+                    sys._openbabelfish_engine = engine
 
             result_chunks = []
             translated_text = ""
-            
-            with Live(Text(""), console=console, refresh_per_second=10) as live:
+
+            if is_repl:
+                console.print("[bold magenta]🐡 OpenBabelFish ❯ [/]", end="")
                 for chunk in engine.translate(text, args.target_lang, args.source_lang):
                     result_chunks.append(chunk)
                     translated_text += chunk
-                    live.update(Panel(
-                        Text(translated_text, style="bright_green"),
-                        title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
-                        title_align="center",
-                        border_style="green",
-                        box=box.ROUNDED,
-                        expand=True,
-                        padding=(1, 2)
-                    ))
-            
-            console.print()
+                    console.print(chunk, end="", highlight=False)
+                console.print()
+                console.print()  # Add space
+            else:
+                src_label = args.source_lang or "auto"
+                hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
+
+                meta_table = Table.grid(padding=(0, 3))
+                meta_table.add_column(style="dim")
+                meta_table.add_column()
+                meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
+                meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
+                meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
+                meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
+
+                console.print()
+                console.print(Align.center(Panel(
+                    meta_table,
+                    title="[bold]🐡  OpenBabelFish[/bold]",
+                    subtitle="[dim]translation in progress…[/dim]",
+                    border_style="cyan",
+                    expand=False,
+                    padding=(0, 2),
+                )))
+                console.print()
+
+                with Live(Text(""), console=console, refresh_per_second=10) as live:
+                    for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                        result_chunks.append(chunk)
+                        translated_text += chunk
+                        live.update(Panel(
+                            Text(translated_text, style="bright_green"),
+                            title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
+                            title_align="center",
+                            border_style="green",
+                            box=box.ROUNDED,
+                            expand=True,
+                            padding=(1, 2)
+                        ))
+                console.print()
 
             if args.output:
                 out_path = args.output.strip('"\'')
