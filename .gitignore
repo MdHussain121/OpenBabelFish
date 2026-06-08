@@ -45,3 +45,4 @@ test.txt
 test2.txt
 *.bak
 *.tmp
+scratch/
