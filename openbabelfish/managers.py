@@ -1,16 +1,15 @@
 import os
 import sys
 import subprocess
-import importlib
 import contextlib
 import io
+import importlib.metadata
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from rich.console import Console
 from rich.progress import (
-    Progress, SpinnerColumn, TextColumn, BarColumn, 
-    DownloadColumn, TransferSpeedColumn, TimeRemainingColumn, TimeElapsedColumn
+    Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 )
 from huggingface_hub import snapshot_download, HfApi
 from huggingface_hub.utils import disable_progress_bars, enable_progress_bars
@@ -68,7 +67,6 @@ class DependencyManager:
         """Check if CUDA runtime libraries are installed in the environment."""
         try:
             # Check for package metadata instead of imports, which is more reliable
-            import importlib.metadata
             importlib.metadata.version("nvidia-cublas-cu12")
             return True
         except importlib.metadata.PackageNotFoundError:
@@ -76,7 +74,6 @@ class DependencyManager:
 
     def check_dependencies(self) -> List[dict]:
         """Audit the current environment for all relevant packages."""
-        import importlib.metadata
         results = []
         for category, packages in REQUIRED_PACKAGES.items():
             for pkg, req in packages.items():
@@ -146,6 +143,38 @@ class DependencyManager:
         except subprocess.CalledProcessError as e:
             console.print(f"[bold red]✗ Failed to install GPU support:[/] {e}")
             return False
+
+@contextlib.contextmanager
+def silenced_output():
+    """Redirects stdout and stderr to devnull, yielding a console that writes to the original stdout."""
+    try:
+        old_stdout_fd = sys.stdout.fileno()
+        old_stderr_fd = sys.stderr.fileno()
+    except (AttributeError, io.UnsupportedOperation):
+        # Fallback if fileno() is not supported (e.g. some IDE consoles or testing environments)
+        yield None
+        return
+
+    # Duplicate original file descriptors
+    saved_stdout_fd = os.dup(old_stdout_fd)
+    saved_stderr_fd = os.dup(old_stderr_fd)
+    
+    try:
+        with open(os.devnull, "w") as fnull:
+            null_fd = fnull.fileno()
+            os.dup2(null_fd, old_stdout_fd)
+            os.dup2(null_fd, old_stderr_fd)
+            
+            # Open the saved stdout fd for our private console output
+            with os.fdopen(saved_stdout_fd, "w", encoding="utf-8", closefd=False) as private_out:
+                yield Console(file=private_out)
+    finally:
+        # Restore original descriptors
+        os.dup2(saved_stdout_fd, old_stdout_fd)
+        os.dup2(saved_stderr_fd, old_stderr_fd)
+        # Close the duplicates
+        os.close(saved_stdout_fd)
+        os.close(saved_stderr_fd)
 
 class ModelManager:
     """Manages local model storage and Hugging Face downloads."""
@@ -224,71 +253,43 @@ class ModelManager:
         
         total_size, file_count = self.get_repo_stats(repo_id)
         
-        # Record original file descriptors (OS level)
         try:
-            old_stdout_fd = sys.stdout.fileno()
-            old_stderr_fd = sys.stderr.fileno()
-        except (AttributeError, io.UnsupportedOperation):
-            # Fallback for environments where fileno() isn't available
-            return self._download_fallback(variant, repo_id, local_dir, total_size)
+            with silenced_output() as local_console:
+                if local_console is None:
+                    # Fallback for environments where fileno() isn't available
+                    return self._download_fallback(variant, repo_id, local_dir, total_size)
 
-        # Duplicate the terminal's FDs so we have private "Clean Channels" for stdout and stderr
-        saved_stdout_fd = os.dup(old_stdout_fd)
-        saved_stderr_fd = os.dup(old_stderr_fd)
-        
-        try:
-            # SHADOW CONSOLE: Absolute silence for all library noise
-            with open(os.devnull, "w") as fnull:
-                null_fd = fnull.fileno()
-                os.dup2(null_fd, old_stdout_fd)
-                os.dup2(null_fd, old_stderr_fd)
-                
-                # closefd=False keeps saved_stdout_fd open when private_out is closed/exits context
-                with os.fdopen(saved_stdout_fd, "w", encoding="utf-8", closefd=False) as private_out:
-                    local_console = Console(file=private_out)
+                if file_count > 0:
+                    local_console.print(f"Fetching {file_count} files")
+
+                with Progress(
+                    SpinnerColumn(spinner_name="dots"),
+                    TextColumn(f"[bold cyan]Downloading {variant}... [/]"),
+                    TimeElapsedColumn(),
+                    console=local_console,
+                ) as progress:
+                    progress.add_task("download", total=None)
                     
-                    if file_count > 0:
-                        local_console.print(f"Fetching {file_count} files")
-
-                    with Progress(
-                        SpinnerColumn(spinner_name="dots"),
-                        TextColumn(f"[bold cyan]Downloading {variant}... [/]"),
-                        TimeElapsedColumn(),
-                        console=local_console,
-                    ) as progress:
-                        progress.add_task("download", total=None)
-                        
-                        # Run the download in silent mode
-                        disable_progress_bars()
-                        try:
-                            snapshot_download(
-                                repo_id=repo_id,
-                                local_dir=local_dir,
-                            )
-                        finally:
-                            enable_progress_bars()
-                
-            # Success - terminal fds will be restored in finally
+                    # Run the download in silent mode
+                    disable_progress_bars()
+                    try:
+                        snapshot_download(
+                            repo_id=repo_id,
+                            local_dir=local_dir,
+                        )
+                    finally:
+                        enable_progress_bars()
             return True
         except Exception as e:
-            # We must restore terminal output if it crashed inside the muzzle
-            os.dup2(saved_stdout_fd, old_stdout_fd) 
-            os.dup2(saved_stderr_fd, old_stderr_fd)
             console.print(f"[bold red]✗ Download error:[/] {e}")
             return False
-        finally:
-            # Restore the system FDs 1 and 2 to their original terminal state
-            os.dup2(saved_stdout_fd, old_stdout_fd)
-            os.dup2(saved_stderr_fd, old_stderr_fd)
-            os.close(saved_stdout_fd)
-            os.close(saved_stderr_fd)
 
     def _download_fallback(self, variant, repo_id, local_dir, total_size):
         """Simple download without redirection if OS-level hooks fail."""
         try:
             with Progress(
                 SpinnerColumn(spinner_name="dots"),
-                TextColumn("[bold cyan]Fetching {variant}…"),
+                TextColumn(f"[bold cyan]Fetching {variant}…"),
                 BarColumn(bar_width=40),
                 expand=False,
             ) as progress:
