@@ -272,6 +272,40 @@ LANG_MAP.update({
 })
 
 
+def split_sentences(text: str) -> list[str]:
+    """Split paragraph into sentences while respecting common abbreviations and initials."""
+    # Common abbreviations where a period does not denote the end of a sentence
+    ABBREVIATIONS = {
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "vs", "etc", "eg", "ie", "al",
+        "approx", "ca", "cf", "gen", "col", "capt", "sgt", "st", 
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+    }
+    
+    # Split by space after sentence-ending punctuation (. ! ?)
+    raw_splits = re.split(r'(?<=[.!?])\s+', text)
+    sentences = []
+    current_sentence = []
+    
+    for split in raw_splits:
+        current_sentence.append(split)
+        
+        # Check if the split ends with a period and the preceding word is an abbreviation or initial
+        if split.endswith('.'):
+            words = re.findall(r'\b[a-zA-Z]+\b', split)
+            if words:
+                last_word = words[-1].lower()
+                # Check for abbreviation or a single uppercase letter initial (e.g., "J.")
+                if last_word in ABBREVIATIONS or (len(last_word) == 1 and split[-2].isupper()):
+                    continue
+                    
+        sentences.append(" ".join(current_sentence))
+        current_sentence = []
+        
+    if current_sentence:
+        sentences.append(" ".join(current_sentence))
+    return sentences
+
+
 class TranslationEngine:
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
         config = load_config()
@@ -404,7 +438,7 @@ class TranslationEngine:
                 
             # If paragraph is very long, split into sentences for model safety
             if len(para) > 1000:
-                sub_chunks = [s.strip() for s in re.split(r'(?<=[.!?])\s+', para) if s.strip()]
+                sub_chunks = [s.strip() for s in split_sentences(para) if s.strip()]
             else:
                 sub_chunks = [para.strip()]
 
