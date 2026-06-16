@@ -540,7 +540,7 @@ def _run_translation(args, config, model_mgr, dep_mgr):
                 console.print("[bold magenta]🐡 OpenBabelFish ❯[/]")
                 
                 first = True
-                for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                for chunk in engine.translate(text, args.target_lang, args.source_lang, stream=True):
                     result_chunks.append(chunk)
                     translated_text += chunk
                     
@@ -586,7 +586,7 @@ def _run_translation(args, config, model_mgr, dep_mgr):
                             update_display(0)
 
                             current_count = 0
-                            for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                            for chunk in engine.translate(text, args.target_lang, args.source_lang, stream=False):
                                 if chunk != "\n\n":
                                     translated_paragraphs.append(chunk)
                                     current_count += 1
@@ -622,7 +622,7 @@ def _run_translation(args, config, model_mgr, dep_mgr):
                     console.print()
 
                     with Live(Text(""), console=console, refresh_per_second=10) as live:
-                        for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                        for chunk in engine.translate(text, args.target_lang, args.source_lang, stream=True):
                             result_chunks.append(chunk)
                             translated_text += chunk
                             live.update(Panel(
@@ -671,7 +671,7 @@ def _run_translation(args, config, model_mgr, dep_mgr):
         try:
             engine = TranslationEngine(model_path=str(model_path.absolute()), device=current_device)
             result_chunks = []
-            for chunk in engine.translate(text, args.target_lang, args.source_lang):
+            for chunk in engine.translate(text, args.target_lang, args.source_lang, stream=False):
                 result_chunks.append(chunk)
                 sys.stdout.write(chunk)
                 sys.stdout.flush()

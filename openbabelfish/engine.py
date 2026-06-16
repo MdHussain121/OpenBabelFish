@@ -272,6 +272,40 @@ LANG_MAP.update({
 })
 
 
+def split_sentences(text: str) -> list[str]:
+    """Split paragraph into sentences while respecting common abbreviations and initials."""
+    # Common abbreviations where a period does not denote the end of a sentence
+    ABBREVIATIONS = {
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "vs", "etc", "eg", "ie", "al",
+        "approx", "ca", "cf", "gen", "col", "capt", "sgt", "st", 
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+    }
+    
+    # Split by space after sentence-ending punctuation (. ! ?)
+    raw_splits = re.split(r'(?<=[.!?])\s+', text)
+    sentences = []
+    current_sentence = []
+    
+    for split in raw_splits:
+        current_sentence.append(split)
+        
+        # Check if the split ends with a period and the preceding word is an abbreviation or initial
+        if split.endswith('.'):
+            words = re.findall(r'\b[a-zA-Z]+\b', split)
+            if words:
+                last_word = words[-1].lower()
+                # Check for abbreviation or a single uppercase letter initial (e.g., "J.")
+                if last_word in ABBREVIATIONS or (len(last_word) == 1 and split[-2].isupper()):
+                    continue
+                    
+        sentences.append(" ".join(current_sentence))
+        current_sentence = []
+        
+    if current_sentence:
+        sentences.append(" ".join(current_sentence))
+    return sentences
+
+
 class TranslationEngine:
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
         config = load_config()
@@ -381,7 +415,7 @@ class TranslationEngine:
         # We handle splitting logically in the translate method to respect structure
         return iter(text.split("\n\n"))
 
-    def translate(self, text: str, target_lang: str, source_lang: Optional[str] = None) -> Iterator[str]:
+    def translate(self, text: str, target_lang: str, source_lang: Optional[str] = None, stream: bool = False) -> Iterator[str]:
         """Translate text using CTranslate2 with chunking support."""
         if not source_lang:
             source_lang = self.detect_language(text)
@@ -404,78 +438,104 @@ class TranslationEngine:
                 
             # If paragraph is very long, split into sentences for model safety
             if len(para) > 1000:
-                sub_chunks = [s.strip() for s in re.split(r'(?<=[.!?])\s+', para) if s.strip()]
+                sub_chunks = [s.strip() for s in split_sentences(para) if s.strip()]
             else:
                 sub_chunks = [para.strip()]
 
             filter_tokens = {"<unk>", "</s>", "<s>", "<pad>"}
             filter_tokens.update(LANG_MAP.values())
 
-            import queue
-            import threading
+            if stream:
+                import queue
+                import threading
 
-            first_sentence = True
-            for chunk_text in sub_chunks:
-                if not first_sentence:
-                    yield " "
-                first_sentence = False
+                first_sentence = True
+                for chunk_text in sub_chunks:
+                    if not first_sentence:
+                        yield " "
+                    first_sentence = False
 
-                tokens = self.tokenizer.convert_ids_to_tokens(self.tokenizer.encode(chunk_text))
-                if tokens[-1] != src_code:
-                    if tokens[-1] == "</s>":
-                        tokens.append(src_code)
-                    else:
-                        tokens.extend(["</s>", src_code])
+                    tokens = self.tokenizer.convert_ids_to_tokens(self.tokenizer.encode(chunk_text))
+                    if tokens[-1] != src_code:
+                        if tokens[-1] == "</s>":
+                            tokens.append(src_code)
+                        else:
+                            tokens.extend(["</s>", src_code])
 
-                q = queue.Queue()
+                    q = queue.Queue()
 
-                def callback_fn(step_result):
-                    q.put(step_result.token_id)
-                    return False
+                    def callback_fn(step_result):
+                        q.put(step_result.token_id)
+                        return False
 
-                def run_translation():
-                    try:
-                        self.translator.translate_batch(
-                            [tokens],
-                            target_prefix=[[tgt_code]],
-                            beam_size=1,
-                            max_decoding_length=512,
-                            callback=callback_fn
-                        )
-                    except Exception as e:
-                        q.put(e)
-                    finally:
-                        q.put(None)
+                    def run_translation():
+                        try:
+                            self.translator.translate_batch(
+                                [tokens],
+                                target_prefix=[[tgt_code]],
+                                beam_size=1,
+                                max_decoding_length=512,
+                                callback=callback_fn
+                            )
+                        except Exception as e:
+                            q.put(e)
+                        finally:
+                            q.put(None)
 
-                thread = threading.Thread(target=run_translation)
-                thread.start()
+                    thread = threading.Thread(target=run_translation)
+                    thread.start()
 
-                generated_token_ids = []
-                last_text = ""
+                    generated_token_ids = []
+                    last_text = ""
 
-                while thread.is_alive() or not q.empty():
-                    try:
-                        item = q.get(timeout=0.02)
-                        if item is None:
-                            break
-                        if isinstance(item, Exception):
-                            raise item
-                        
-                        token_str = self.tokenizer.convert_ids_to_tokens(item)
-                        if token_str in filter_tokens:
-                            continue
+                    while thread.is_alive() or not q.empty():
+                        try:
+                            item = q.get(timeout=0.02)
+                            if item is None:
+                                break
+                            if isinstance(item, Exception):
+                                raise item
                             
-                        generated_token_ids.append(item)
-                        current_text = self.tokenizer.decode(generated_token_ids)
-                        
-                        if len(current_text) > len(last_text):
-                            diff = current_text[len(last_text):]
-                            yield diff
-                            last_text = current_text
-                    except queue.Empty:
-                        continue
+                            token_str = self.tokenizer.convert_ids_to_tokens(item)
+                            if token_str in filter_tokens:
+                                continue
+                                
+                            generated_token_ids.append(item)
+                            current_text = self.tokenizer.decode(generated_token_ids)
+                            
+                            if len(current_text) > len(last_text):
+                                diff = current_text[len(last_text):]
+                                yield diff
+                                last_text = current_text
+                        except queue.Empty:
+                            continue
 
-                thread.join()
+                    thread.join()
+            else:
+                translated_sub_chunks = []
+                for chunk_text in sub_chunks:
+                    tokens = self.tokenizer.convert_ids_to_tokens(self.tokenizer.encode(chunk_text))
+                    if tokens[-1] != src_code:
+                        if tokens[-1] == "</s>":
+                            tokens.append(src_code)
+                        else:
+                            tokens.extend(["</s>", src_code])
+                            
+                    results = self.translator.translate_batch(
+                        [tokens],
+                        target_prefix=[[tgt_code]],
+                        beam_size=2,
+                        max_decoding_length=512,
+                    )
+                    
+                    output_tokens = results[0].hypotheses[0]
+                    if output_tokens[0] == tgt_code:
+                        output_tokens = output_tokens[1:]
+                    
+                    clean_tokens = [t for t in output_tokens if t not in filter_tokens]
+                    translated_sub_chunks.append(self.tokenizer.decode(self.tokenizer.convert_tokens_to_ids(clean_tokens)))
+                
+                yield " ".join(translated_sub_chunks)
 
             # Add paragraph separation if not the last one
             if i < len(paragraphs) - 1:

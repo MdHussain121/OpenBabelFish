@@ -257,3 +257,16 @@ def test_interactive_shell_translation_mode_behavior(mock_readline, mock_dep_mgr
     # Check arguments of the second call
     second_call_args = mock_run_translation.call_args_list[1][0][0]
     assert second_call_args.text == ["cpu"]
+
+
+def test_split_sentences():
+    from openbabelfish.engine import split_sentences
+    text = "Hello Dr. Smith. How are you today? My name is J. F. Kennedy. We also study et al. (and others) vs. the old system. Here is a version 3.14 which shouldn't split."
+    expected = [
+        "Hello Dr. Smith.",
+        "How are you today?",
+        "My name is J. F. Kennedy.",
+        "We also study et al. (and others) vs. the old system.",
+        "Here is a version 3.14 which shouldn't split."
+    ]
+    assert split_sentences(text) == expected
