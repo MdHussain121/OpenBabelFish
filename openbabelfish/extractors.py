@@ -60,7 +60,7 @@ class FileExtractor:
         """
         self._dep_mgr = dep_mgr
 
-    def extract(self, file_path: str, force_ocr: bool = False) -> str:
+    def extract(self, file_path: str, force_ocr: bool = False, progress_callback = None) -> str:
         """
         Extract plain text from a document file.
 
@@ -68,6 +68,7 @@ class FileExtractor:
             file_path: Path to the input file.
             force_ocr: If True and the file is a PDF, skip text extraction
                        and go straight to OCR.
+            progress_callback: Optional callback for progress updates.
 
         Returns:
             The extracted plain text.
@@ -100,7 +101,7 @@ class FileExtractor:
             self._ensure_deps("ocr")
 
         if kind == "pdf":
-            return PDFExtractor.extract(str(path), force_ocr=force_ocr)
+            return PDFExtractor.extract(str(path), force_ocr=force_ocr, progress_callback=progress_callback)
         elif kind == "docx":
             return DOCXExtractor.extract(str(path))
         elif kind == "pptx":
@@ -154,20 +155,21 @@ class PDFExtractor:
     """
 
     @staticmethod
-    def extract(file_path: str, force_ocr: bool = False) -> str:
+    def extract(file_path: str, force_ocr: bool = False, progress_callback = None) -> str:
         """
         Extract text from a PDF.
 
         Args:
             file_path: Path to the PDF file.
             force_ocr: If True, skip text extraction and use OCR directly.
+            progress_callback: Optional callback for progress updates.
 
         Returns:
             Extracted plain text from all pages.
         """
         if force_ocr:
             console.print("[dim]  OCR mode forced by --ocr flag.[/dim]")
-            return PDFExtractor._extract_ocr(file_path)
+            return PDFExtractor._extract_ocr(file_path, progress_callback=progress_callback)
 
         # Try text extraction first
         text = PDFExtractor._extract_text(file_path)
@@ -195,7 +197,7 @@ class PDFExtractor:
                 )
                 return text
 
-        return PDFExtractor._extract_ocr(file_path)
+        return PDFExtractor._extract_ocr(file_path, progress_callback=progress_callback)
 
     @staticmethod
     def _extract_text(file_path: str) -> str:
@@ -212,7 +214,7 @@ class PDFExtractor:
         return "\n\n".join(pages)
 
     @staticmethod
-    def _extract_ocr(file_path: str) -> str:
+    def _extract_ocr(file_path: str, progress_callback = None) -> str:
         """Extract text from PDF pages as images using EasyOCR."""
         import fitz  # PyMuPDF
         import easyocr
@@ -236,6 +238,7 @@ class PDFExtractor:
         pages = []
 
         with fitz.open(file_path) as doc:
+            total_pages = len(doc)
             for page_num, page in enumerate(doc):
                 # Render page to a high-res image (300 DPI)
                 mat = fitz.Matrix(300 / 72, 300 / 72)
@@ -254,6 +257,8 @@ class PDFExtractor:
                     page_num + 1,
                     len(page_text),
                 )
+                if progress_callback:
+                    progress_callback(page_num + 1, total_pages)
 
         return "\n\n".join(pages)
 

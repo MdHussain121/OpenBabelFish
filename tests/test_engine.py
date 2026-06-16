@@ -214,3 +214,46 @@ def test_directory_output_generation(mock_dep_mgr, mock_model_mgr, mock_save, mo
         assert expected_path.read_text(encoding="utf-8") == "translated text"
     finally:
         shutil.rmtree(temp_dir)
+
+
+@patch("openbabelfish.cli._run_translation")
+@patch("openbabelfish.cli.console")
+@patch("openbabelfish.cli.load_config")
+@patch("openbabelfish.cli.ModelManager")
+@patch("openbabelfish.cli.DependencyManager")
+@patch("openbabelfish.cli.readline", create=True)
+def test_interactive_shell_translation_mode_behavior(mock_readline, mock_dep_mgr, mock_model_mgr, mock_load, mock_console, mock_run_translation):
+    from openbabelfish.cli import interactive_shell
+    
+    mock_load.return_value = {"model_variant": "600M", "device": "cpu"}
+    mock_console.width = 80
+    mock_dep_mgr.return_value.check_dependencies.return_value = []
+    mock_model_mgr.return_value.get_model_status.return_value = "DOWNLOADED"
+    
+    # We simulate a sequence of inputs in translation mode:
+    # 1. "- Slack and Microsoft Teams" -> should call _run_translation
+    # 2. "cpu" -> should call _run_translation (previously it was a command)
+    # 3. "--exit" -> should exit translation mode (console.input next will raise KeyboardInterrupt to exit REPL loop)
+    mock_console.input.side_effect = [
+        "- Slack and Microsoft Teams",
+        "cpu",
+        "--exit",
+        KeyboardInterrupt
+    ]
+    
+    try:
+        interactive_shell(start_translate=True, target_lang="hindi", source_lang="auto")
+    except KeyboardInterrupt:
+        pass
+        
+    # Verify _run_translation was called for the first two inputs
+    assert mock_run_translation.call_count == 2
+    
+    # Check arguments of the first call
+    first_call_args = mock_run_translation.call_args_list[0][0][0]
+    assert first_call_args.text == ["- Slack and Microsoft Teams"]
+    assert first_call_args.target_lang == "hindi"
+    
+    # Check arguments of the second call
+    second_call_args = mock_run_translation.call_args_list[1][0][0]
+    assert second_call_args.text == ["cpu"]

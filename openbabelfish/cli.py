@@ -66,6 +66,34 @@ def _print_divider(title: str = "", style: str = "bright_black"):
         console.print(Rule(style=style, characters="─"))
 
 
+def double_space_text(text: Text, console: Console, panel_padding_width: int = 6) -> Text:
+    """Wrap the text to the console width and insert empty lines between wrapped lines."""
+    width = (console.width or 80) - panel_padding_width
+    if width <= 0:
+        width = 40
+    lines = text.wrap(console, width)
+    spaced_text = Text()
+    for i, line in enumerate(lines):
+        spaced_text.append(line)
+        if i < len(lines) - 1:
+            if len(line.plain.strip()) == 0 or len(lines[i+1].plain.strip()) == 0:
+                spaced_text.append("\n")
+            else:
+                spaced_text.append("\n\n")
+    return spaced_text
+
+
+def make_progress_bar(label: str, percentage: int) -> Text:
+    """Create a premium, quantized progress bar."""
+    filled = percentage // 5
+    bar = "█" * filled + "░" * (20 - filled)
+    return Text.assemble(
+        (f"  {label:<22} ", "bold cyan"),
+        (f"[{bar}] ", "green"),
+        (f"{percentage}%", "bold white")
+    )
+
+
 # ── HELP ──────────────────────────────────────────────────────────────────────
 class SafeArgumentParser(argparse.ArgumentParser):
     """Custom parser for the REPL to prevent system exits and usage prints on errors."""
@@ -391,6 +419,10 @@ def _run_translation(args, config, model_mgr, dep_mgr):
 
     # Input handling (File vs stdin vs arguments)
     text = ""
+    ocr_was_run = False
+    is_tty = sys.stdout.isatty()
+    is_repl = hasattr(sys, '_openbabelfish_repl') and sys._openbabelfish_repl
+
     if args.file:
         file_path = args.file.strip('"\'')
         try:
@@ -399,7 +431,32 @@ def _run_translation(args, config, model_mgr, dep_mgr):
             if ext in SUPPORTED_EXTENSIONS:
                 extractor = FileExtractor(dep_mgr)
                 force_ocr = getattr(args, 'ocr', False)
-                text = extractor.extract(file_path, force_ocr=force_ocr)
+                
+                progress_callback = None
+                if is_tty and not is_repl:
+                    live_ocr = Live(Text(""), console=console, refresh_per_second=10)
+                    live_ocr.start()
+                    
+                    def ocr_progress_callback(page_num, total_pages):
+                        nonlocal ocr_was_run
+                        ocr_was_run = True
+                        pct = int((page_num / total_pages) * 100)
+                        display_pct = (pct // 10) * 10
+                        ocr_bar = make_progress_bar("OCR Progress", display_pct)
+                        live_ocr.update(Panel(
+                            ocr_bar,
+                            title="[bold cyan]Document Extraction (OCR)[/bold cyan]",
+                            border_style="cyan",
+                            padding=(1, 2)
+                        ))
+                    
+                    progress_callback = ocr_progress_callback
+                
+                try:
+                    text = extractor.extract(file_path, force_ocr=force_ocr, progress_callback=progress_callback)
+                finally:
+                    if is_tty and not is_repl and progress_callback is not None:
+                        live_ocr.stop()
             else:
                 # Fallback: try reading as plain text for unknown extensions
                 text = Path(file_path).read_text(encoding="utf-8")
@@ -479,49 +536,104 @@ def _run_translation(args, config, model_mgr, dep_mgr):
             translated_text = ""
 
             if is_repl:
-                console.print("[bold magenta]🐡 OpenBabelFish ❯ [/]", end="")
+                console.print()
+                console.print("[bold magenta]🐡 OpenBabelFish ❯[/]")
+                
+                first = True
                 for chunk in engine.translate(text, args.target_lang, args.source_lang):
                     result_chunks.append(chunk)
                     translated_text += chunk
-                    console.print(chunk, end="", highlight=False)
+                    
+                    formatted_chunk = chunk.replace("\n", "\n  ")
+                    if first:
+                        console.print("  " + formatted_chunk, end="", highlight=False)
+                        first = False
+                    else:
+                        console.print(formatted_chunk, end="", highlight=False)
                 console.print()
-                console.print()  # Add space
+                console.print()
             else:
-                src_label = args.source_lang or "auto"
-                hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
+                if args.file:
+                    total_paragraphs = len([p for p in text.split("\n\n") if p.strip()])
+                    translated_paragraphs = []
+                    
+                    if total_paragraphs > 0:
+                        with Live(Text(""), console=console, refresh_per_second=10) as live:
+                            def update_display(pct_completed: int):
+                                layout = Table.grid(padding=(1, 0))
+                                layout.add_column()
+                                
+                                if ocr_was_run:
+                                    ocr_bar = make_progress_bar("OCR Progress", 100)
+                                    layout.add_row(ocr_bar)
+                                    
+                                trans_bar = make_progress_bar("Translation Progress", pct_completed)
+                                layout.add_row(trans_bar)
+                                layout.add_row(Rule(style="dim"))
+                                
+                                translated_text_so_far = "\n\n".join(translated_paragraphs)
+                                layout.add_row(Panel(
+                                    Text(translated_text_so_far, style="bright_green"),
+                                    title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
+                                    title_align="center",
+                                    border_style="green",
+                                    box=box.ROUNDED,
+                                    expand=True,
+                                    padding=(1, 2)
+                                ))
+                                live.update(layout)
 
-                meta_table = Table.grid(padding=(0, 3))
-                meta_table.add_column(style="dim")
-                meta_table.add_column()
-                meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
-                meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
-                meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
-                meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
+                            update_display(0)
 
-                console.print()
-                console.print(Align.center(Panel(
-                    meta_table,
-                    title="[bold]🐡  OpenBabelFish[/bold]",
-                    subtitle="[dim]translation in progress…[/dim]",
-                    border_style="cyan",
-                    expand=False,
-                    padding=(0, 2),
-                )))
-                console.print()
+                            current_count = 0
+                            for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                                if chunk != "\n\n":
+                                    translated_paragraphs.append(chunk)
+                                    current_count += 1
+                                    pct = int((current_count / total_paragraphs) * 100)
+                                    display_pct = (pct // 10) * 10
+                                    update_display(display_pct)
+                            
+                            update_display(100)
+                            translated_text = "\n\n".join(translated_paragraphs)
+                    else:
+                        translated_text = ""
+                else:
+                    src_label = args.source_lang or "auto"
+                    hw_color  = "bright_green" if current_device == "cuda" else "bright_yellow"
 
-                with Live(Text(""), console=console, refresh_per_second=10) as live:
-                    for chunk in engine.translate(text, args.target_lang, args.source_lang):
-                        result_chunks.append(chunk)
-                        translated_text += chunk
-                        live.update(Panel(
-                            Text(translated_text, style="bright_green"),
-                            title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
-                            title_align="center",
-                            border_style="green",
-                            box=box.ROUNDED,
-                            expand=True,
-                            padding=(1, 2)
-                        ))
+                    meta_table = Table.grid(padding=(0, 3))
+                    meta_table.add_column(style="dim")
+                    meta_table.add_column()
+                    meta_table.add_row("Engine",    "[green]NLLB-200 / CTranslate2[/]")
+                    meta_table.add_row("Hardware",  f"[{hw_color}]{'⚡ CUDA (GPU)' if current_device == 'cuda' else '⚙  CPU'}[/]")
+                    meta_table.add_row("Model",     f"[cyan]{model_variant}[/]")
+                    meta_table.add_row("Direction", f"[dim]{src_label}[/dim]  [bold bright_white]→[/]  [bold magenta]{args.target_lang}[/]")
+
+                    console.print()
+                    console.print(Align.center(Panel(
+                        meta_table,
+                        title="[bold]🐡  OpenBabelFish[/bold]",
+                        subtitle="[dim]translation in progress…[/dim]",
+                        border_style="cyan",
+                        expand=False,
+                        padding=(0, 2),
+                    )))
+                    console.print()
+
+                    with Live(Text(""), console=console, refresh_per_second=10) as live:
+                        for chunk in engine.translate(text, args.target_lang, args.source_lang):
+                            result_chunks.append(chunk)
+                            translated_text += chunk
+                            live.update(Panel(
+                                Text(translated_text, style="bright_green"),
+                                title="[bold green]✦ TRANSLATION OUTPUT ✦[/bold green]",
+                                title_align="center",
+                                border_style="green",
+                                box=box.ROUNDED,
+                                expand=True,
+                                padding=(1, 2)
+                            ))
                 console.print()
 
             if args.output:
@@ -677,7 +789,7 @@ def interactive_shell(start_translate=False, target_lang=None, source_lang=None)
                 Text.assemble(
                     ("Interactive Translation Mode Active!\n", "bold green"),
                     (f"Direction: {mode_from_lang} ❯ {mode_to_lang}\n", "cyan"),
-                    ("Type any sentence to translate. Type another command or 'exit' to quit this mode.", "dim")
+                    ("Type any sentence to translate. Type '--exit' to exit this mode.", "dim")
                 ),
                 border_style="green",
                 expand=False,
@@ -704,36 +816,13 @@ def interactive_shell(start_translate=False, target_lang=None, source_lang=None)
             if not user_input:
                 continue
                 
-            if user_input.lower() in ["exit", "quit"]:
-                if in_translation_mode:
+            if in_translation_mode:
+                if user_input.lower() == "--exit":
                     in_translation_mode = False
                     console.print("[yellow]✓ Exited interactive translation mode.[/yellow]\n")
                     continue
-                console.print("[dim]Goodbye![/]")
-                break
-
-            # Parse user input into tokens
-            try:
-                tokens = shlex.split(user_input)
-            except ValueError as e:
-                console.print(Align.center(Text(f"Command Error: {e}", style="bold red")))
-                continue
-
-            if not tokens:
-                continue
-
-            first_token_lower = tokens[0].lower()
-            
-            # Check if this is a direct translation prompt (e.g. "spanish: hello")
-            is_direct_translation = ":" in user_input and not user_input.startswith("-") and first_token_lower.split(":")[0] not in cmd_mappings
-
-            # Check if input is a command that should exit translation mode
-            is_command = False
-            if first_token_lower.startswith("-") or first_token_lower in cmd_mappings:
-                is_command = True
-
-            if in_translation_mode and not is_command and not is_direct_translation:
-                # Run translation for this text directly
+                
+                # Treat everything in translation mode as direct text to translate
                 class DummyArgs:
                     pass
                 args = DummyArgs()
@@ -753,9 +842,24 @@ def interactive_shell(start_translate=False, target_lang=None, source_lang=None)
                 _run_translation(args, config, model_mgr, dep_mgr)
                 continue
 
-            if in_translation_mode and is_command:
-                in_translation_mode = False
-                console.print("[yellow]✓ Exited interactive translation mode.[/yellow]\n")
+            if user_input.lower() in ["exit", "quit"]:
+                console.print("[dim]Goodbye![/]")
+                break
+
+            # Parse user input into tokens
+            try:
+                tokens = shlex.split(user_input)
+            except ValueError as e:
+                console.print(Align.center(Text(f"Command Error: {e}", style="bold red")))
+                continue
+
+            if not tokens:
+                continue
+
+            first_token_lower = tokens[0].lower()
+            
+            # Check if this is a direct translation prompt (e.g. "spanish: hello")
+            is_direct_translation = ":" in user_input and not user_input.startswith("-") and first_token_lower.split(":")[0] not in cmd_mappings
 
             if not is_direct_translation:
                 # Perform generalization of tokens
@@ -830,7 +934,7 @@ def interactive_shell(start_translate=False, target_lang=None, source_lang=None)
                                 Text.assemble(
                                     ("Interactive Translation Mode Active!\n", "bold green"),
                                     (f"Direction: {mode_from_lang} ❯ {mode_to_lang}\n", "cyan"),
-                                    ("Type any sentence to translate. Type another command or 'exit' to quit this mode.", "dim")
+                                    ("Type any sentence to translate. Type '--exit' to exit this mode.", "dim")
                                 ),
                                 border_style="green",
                                 expand=False,

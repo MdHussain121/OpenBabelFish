@@ -265,7 +265,7 @@ class TestDependencyAutoInstall:
             f.write(b"fake pdf")
             f.flush()
             extractor.extract(f.name, force_ocr=True)
-            mock_pdf_extract.assert_called_once_with(f.name, force_ocr=True)
+            mock_pdf_extract.assert_called_once_with(f.name, force_ocr=True, progress_callback=None)
         os.unlink(f.name)
 
 
