@@ -283,6 +283,7 @@ class TranslationEngine:
         
         self._translator = None
         self._tokenizer = None
+        self._dll_cookies = []
 
     def reload(self, model_path: Optional[str] = None, device: Optional[str] = None):
         """Re-initialize the translator and tokenizer with new settings."""
@@ -301,6 +302,14 @@ class TranslationEngine:
         if sys.platform != "win32" or self.device != "cuda":
             return
 
+        # Ensure process search path includes user-added directories for standard LoadLibrary
+        try:
+            import ctypes
+            # LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000
+            ctypes.windll.kernel32.SetDefaultDllDirectories(0x00001000)
+        except Exception:
+            pass
+
         # Locate the virtual environment's site-packages
         for path in sys.path:
             if "site-packages" in path:
@@ -310,7 +319,8 @@ class TranslationEngine:
                     for bin_dir in nvidia_base.glob("*/bin"):
                         if bin_dir.is_dir():
                             try:
-                                os.add_dll_directory(str(bin_dir.absolute()))
+                                cookie = os.add_dll_directory(str(bin_dir.absolute()))
+                                self._dll_cookies.append(cookie)
                             except Exception:
                                 pass
         
@@ -398,40 +408,75 @@ class TranslationEngine:
             else:
                 sub_chunks = [para.strip()]
 
-            # Translate sub-chunks (sentences) in a batch
-            batch_source_tokens = []
+            filter_tokens = {"<unk>", "</s>", "<s>", "<pad>"}
+            filter_tokens.update(LANG_MAP.values())
+
+            import queue
+            import threading
+
+            first_sentence = True
             for chunk_text in sub_chunks:
+                if not first_sentence:
+                    yield " "
+                first_sentence = False
+
                 tokens = self.tokenizer.convert_ids_to_tokens(self.tokenizer.encode(chunk_text))
                 if tokens[-1] != src_code:
                     if tokens[-1] == "</s>":
                         tokens.append(src_code)
                     else:
                         tokens.extend(["</s>", src_code])
-                batch_source_tokens.append(tokens)
 
-            target_prefixes = [[tgt_code]] * len(sub_chunks)
-            filter_tokens = {"<unk>", "</s>", "<s>", "<pad>"}
-            filter_tokens.update(LANG_MAP.values())
+                q = queue.Queue()
 
-            results = self.translator.translate_batch(
-                batch_source_tokens,
-                target_prefix=target_prefixes,
-                beam_size=2,
-                max_decoding_length=512,
-            )
-            
-            translated_sub_chunks = []
-            for result in results:
-                output_tokens = result.hypotheses[0]
-                if output_tokens[0] == tgt_code:
-                    output_tokens = output_tokens[1:]
-                
-                clean_tokens = [t for t in output_tokens if t not in filter_tokens]
-                translated_sub_chunks.append(self.tokenizer.decode(self.tokenizer.convert_tokens_to_ids(clean_tokens)))
-            
-            # Combine sentences into a paragraph and yield
-            yield " ".join(translated_sub_chunks)
-            
+                def callback_fn(step_result):
+                    q.put(step_result.token_id)
+                    return False
+
+                def run_translation():
+                    try:
+                        self.translator.translate_batch(
+                            [tokens],
+                            target_prefix=[[tgt_code]],
+                            beam_size=1,
+                            max_decoding_length=512,
+                            callback=callback_fn
+                        )
+                    except Exception as e:
+                        q.put(e)
+                    finally:
+                        q.put(None)
+
+                thread = threading.Thread(target=run_translation)
+                thread.start()
+
+                generated_token_ids = []
+                last_text = ""
+
+                while thread.is_alive() or not q.empty():
+                    try:
+                        item = q.get(timeout=0.02)
+                        if item is None:
+                            break
+                        if isinstance(item, Exception):
+                            raise item
+                        
+                        token_str = self.tokenizer.convert_ids_to_tokens(item)
+                        if token_str in filter_tokens:
+                            continue
+                            
+                        generated_token_ids.append(item)
+                        current_text = self.tokenizer.decode(generated_token_ids)
+                        
+                        if len(current_text) > len(last_text):
+                            diff = current_text[len(last_text):]
+                            yield diff
+                            last_text = current_text
+                    except queue.Empty:
+                        continue
+
+                thread.join()
+
             # Add paragraph separation if not the last one
             if i < len(paragraphs) - 1:
                 yield "\n\n"
